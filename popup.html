@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 340px; font: 13px/1.5 -apple-system, sans-serif; padding: 12px; color: #1a1a1a; }
+  h2 { font-size: 15px; margin-bottom: 4px; }
+  .desc { font-size: 11px; color: #888; margin-bottom: 8px; }
+  label { display: block; font-weight: 600; margin-top: 8px; font-size: 12px; color: #555; }
+  input { width: 100%; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; margin-top: 2px; }
+  .slot { background: #f8f8f8; border: 1px solid #e5e5e5; border-radius: 6px; padding: 8px; margin-top: 8px; }
+  .slot-header { font-weight: 600; font-size: 12px; color: #333; margin-bottom: 4px; }
+  .row { display: flex; gap: 8px; }
+  .row > div { flex: 1; }
+  button { width: 100%; padding: 10px; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 12px; }
+  #startBtn { background: #2563eb; color: #fff; }
+  #startBtn:hover { background: #1d4ed8; }
+  #startBtn.active { background: #dc2626; }
+  #status { margin-top: 8px; padding: 6px 8px; border-radius: 4px; font-size: 12px; display: none; }
+  #status.info { display: block; background: #eff6ff; color: #1e40af; }
+  #status.success { display: block; background: #f0fdf4; color: #166534; }
+  #status.warn { display: block; background: #fefce8; color: #854d0e; }
+  small { color: #888; font-size: 11px; display: block; margin-top: 1px; }
+  .add-btn { background: #f3f4f6; color: #333; border: 1px dashed #ccc; font-size: 12px; padding: 6px; margin-top: 8px; }
+  .add-btn:hover { background: #e5e7eb; }
+  .remove-btn { background: none; border: none; color: #999; cursor: pointer; font-size: 14px; padding: 0 4px; width: auto; margin: 0; }
+  .remove-btn:hover { color: #dc2626; }
+</style>
+</head>
+<body>
+  <h2>🍽️ Tock Sniper</h2>
+  <div class="desc">Opens one tab per date. Each races to grab your preferred time.</div>
+
+  <label>Restaurant URL</label>
+  <input id="url" value="https://www.exploretock.com/fui-hui-hua-san-francisco" />
+
+  <label>Party Size</label>
+  <input id="partySize" type="number" min="1" max="20" value="2" />
+
+  <label>Release Time</label>
+  <input id="releaseTime" type="datetime-local" step="1" />
+  <small>Auto-refreshes 500ms before this time.</small>
+
+  <label>Preferred Times (all tabs)</label>
+  <input id="prefTimes" value="8:00 PM, 5:00 PM" />
+  <small>Tries in order. Fallback = latest available.</small>
+
+  <div id="slots"></div>
+  <button class="add-btn" id="addSlot">+ Add Date</button>
+
+  <button id="startBtn">⚡ Arm Sniper (opens 3 tabs)</button>
+  <div id="status"></div>
+
+<script src="popup.js"></script>
+</body>
+</html>

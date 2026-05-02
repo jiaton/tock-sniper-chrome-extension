@@ -29,11 +29,11 @@
 </style>
 </head>
 <body>
-  <h2>🍽️ Tock Sniper</h2>
-  <div class="desc">Opens one tab per date. Each races to grab your preferred time.</div>
+  <h2>🎯 Tock Sniper</h2>
+  <div class="desc">Auto-grab Tock reservations the instant they drop.</div>
 
   <label>Restaurant URL</label>
-  <input id="url" value="https://www.exploretock.com/fui-hui-hua-san-francisco" />
+  <input id="url" placeholder="https://www.exploretock.com/your-restaurant" />
 
   <label>Party Size</label>
   <input id="partySize" type="number" min="1" max="20" value="2" />
@@ -43,7 +43,7 @@
   <small>Auto-refreshes 500ms before this time.</small>
 
   <label>Preferred Times (all tabs)</label>
-  <input id="prefTimes" value="8:00 PM, 5:00 PM" />
+  <input id="prefTimes" placeholder="e.g. 7:00 PM, 8:00 PM" />
   <small>Tries in order. Fallback = latest available.</small>
 
   <div id="slots"></div>

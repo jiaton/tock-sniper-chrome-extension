@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Tock Sniper",
   "version": "1.0.0",
-  "description": "Auto-grab Tock reservations the instant they drop. Set your target dates, preferred times, and release time — the extension does the rest.",
+  "description": "Auto-grab Tock reservations the instant they drop. Set target dates, preferred times, and release time.",
   "permissions": ["storage", "alarms"],
   "action": {
     "default_popup": "popup.html",

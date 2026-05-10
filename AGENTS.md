@@ -4,8 +4,9 @@
 Auto-grab reservations on Tock (exploretock.com) the instant slots drop. Works with any Tock restaurant.
 
 ## Architecture: Multi-Tab Sniping
-- Popup opens **one tab per target date**
-- Each tab independently: waits for release time → reloads → clicks "Book now" → selects date → picks preferred time → reaches checkout
+- Popup opens **one tab per target date/time pair**
+- If the Tock URL includes `date`, `size`, and `time`, tabs open with those query params already set
+- Each tab independently: waits for release time → reloads → clicks "Book now" → uses URL-selected date when available → picks target time → reaches checkout
 - Tab title shows status: 🎯 = waiting, ✅ = checkout reached
 
 ## Files
@@ -33,10 +34,10 @@ tock-sniper-ext/
 | Checkout page | URL contains `/checkout/` |
 
 ## Content Script Flow
-1. **Before release time**: show countdown overlay, reload at release - 100ms
+1. **Before release time**: estimate exploretock.com clock offset, keep the lowest-RTT sample, show millisecond countdown overlay, freeze calibration in the final 5s, reload at release - 75ms
 2. **After release time**: snipe immediately
    - Find "Book now" link (retry up to 15s)
-   - Click → dialog opens → select date on calendar (navigate months if needed)
+   - Click → dialog opens → skip calendar selection when URL date matches target, otherwise select date
    - Wait for time slots → adjust party size → pick preferred time → click "Book"
    - Handle seating area selection if prompted
    - Check for checkout

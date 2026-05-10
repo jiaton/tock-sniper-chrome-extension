@@ -66,7 +66,9 @@ chrome.storage.onChanged.addListener((changes) => {
 function updateButton(armed) {
   const btn = $("#startBtn");
   const count = $$(".slot-date").length;
-  btn.textContent = armed ? "⏹ Disarm All" : `⚡ Arm Sniper (opens ${count} tab${count !== 1 ? "s" : ""})`;
+  const timeCount = Math.max(1, parseCsv($("#prefTimes").value || "").length);
+  const tabCount = Math.max(1, count) * timeCount;
+  btn.textContent = armed ? "⏹ Disarm All" : `⚡ Arm Sniper (opens ${tabCount} tab${tabCount !== 1 ? "s" : ""})`;
   btn.className = armed ? "active" : "";
 }
 
@@ -78,10 +80,104 @@ function showStatus(msg, type) {
 
 const parseCsv = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
+function parseTockUrl(url) {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.hostname.endsWith("exploretock.com")) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function displayTimeToParam(time) {
+  const trimmed = time.trim();
+  const twentyFour = trimmed.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (twentyFour) return `${twentyFour[1].padStart(2, "0")}:${twentyFour[2]}`;
+
+  const twelve = trimmed.match(/^(\d{1,2})(?::([0-5]\d))?\s*([AP])\.?M\.?$/i);
+  if (!twelve) return "";
+
+  let hour = parseInt(twelve[1], 10);
+  const minute = twelve[2] || "00";
+  const meridiem = twelve[3].toUpperCase();
+  if (meridiem === "A" && hour === 12) hour = 0;
+  if (meridiem === "P" && hour !== 12) hour += 12;
+  return `${String(hour).padStart(2, "0")}:${minute}`;
+}
+
+function paramTimeToDisplay(time) {
+  const match = time?.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  if (!match) return "";
+  let hour = parseInt(match[1], 10);
+  const minute = match[2];
+  const meridiem = hour >= 12 ? "PM" : "AM";
+  hour = hour % 12 || 12;
+  return `${hour}:${minute} ${meridiem}`;
+}
+
+function buildTargetUrl(baseUrl, date, partySize, targetTime) {
+  const url = new URL(baseUrl);
+  url.searchParams.set("date", date);
+  url.searchParams.set("size", String(partySize));
+  const timeParam = displayTimeToParam(targetTime || "");
+  if (timeParam) url.searchParams.set("time", timeParam);
+  return url.toString();
+}
+
+function buildTargets(config) {
+  const base = parseTockUrl(config.url);
+  if (!base) return [];
+
+  const urlDate = base.searchParams.get("date");
+  const urlTime = paramTimeToDisplay(base.searchParams.get("time"));
+  const dates = config.dates.length ? config.dates : [urlDate].filter(Boolean);
+  const times = config.prefTimes.length ? config.prefTimes : [urlTime].filter(Boolean);
+
+  return dates.flatMap((date) => {
+    const dateTimes = times.length ? times : [""];
+    return dateTimes.map((time) => {
+      const normalizedTime = paramTimeToDisplay(displayTimeToParam(time)) || time;
+      return {
+        date,
+        time: normalizedTime,
+        url: buildTargetUrl(config.url, date, config.partySize, normalizedTime),
+      };
+    });
+  });
+}
+
+function syncFieldsFromUrl() {
+  const parsed = parseTockUrl($("#url").value.trim());
+  if (!parsed) return;
+
+  const urlDate = parsed.searchParams.get("date");
+  const urlSize = parsed.searchParams.get("size");
+  const urlTime = paramTimeToDisplay(parsed.searchParams.get("time"));
+
+  if (urlSize) $("#partySize").value = urlSize;
+  if (urlTime && !$("#prefTimes").value.trim()) $("#prefTimes").value = urlTime;
+  if (urlDate) {
+    const dateInputs = [...$$(".slot-date")];
+    if (dateInputs.length === 0) addSlotUI(urlDate);
+    else if (dateInputs.every((input) => input.value !== urlDate)) {
+      dateInputs.forEach((input, idx) => {
+        if (idx === 0) input.value = urlDate;
+        else input.closest(".slot")?.remove();
+      });
+    }
+  }
+  updateButton();
+}
+
 $("#addSlot").addEventListener("click", () => {
   addSlotUI();
   updateButton();
 });
+
+$("#url").addEventListener("change", syncFieldsFromUrl);
+$("#url").addEventListener("blur", syncFieldsFromUrl);
+$("#prefTimes").addEventListener("input", () => updateButton());
 
 $("#startBtn").addEventListener("click", async () => {
   const armed = (await chrome.storage.local.get("sniping")).sniping;
@@ -91,11 +187,6 @@ $("#startBtn").addEventListener("click", async () => {
   }
 
   const dates = [...$$(".slot-date")].map((el) => el.value).filter(Boolean);
-  if (dates.length === 0) {
-    showStatus("Add at least one date", "warn");
-    return;
-  }
-
   const config = {
     url: $("#url").value.trim(),
     partySize: parseInt($("#partySize").value) || 2,
@@ -104,16 +195,31 @@ $("#startBtn").addEventListener("click", async () => {
     dates,
   };
 
-  if (!config.url.includes("exploretock.com")) {
+  const parsedUrl = parseTockUrl(config.url);
+  if (!parsedUrl) {
     showStatus("Enter a valid Tock URL", "warn");
     return;
   }
 
-  chrome.storage.local.set({ config, sniping: true });
-  showStatus(`Armed! Opening ${dates.length} tabs...`, "info");
+  if (!config.dates.length && parsedUrl.searchParams.get("date")) {
+    config.dates = [parsedUrl.searchParams.get("date")];
+  }
+  if (!config.prefTimes.length && parsedUrl.searchParams.get("time")) {
+    config.prefTimes = [paramTimeToDisplay(parsedUrl.searchParams.get("time"))];
+  }
 
-  // Open one tab per date
-  for (const date of dates) {
-    chrome.tabs.create({ url: config.url, active: false });
+  const targets = buildTargets(config);
+  if (!targets.length) {
+    showStatus("Add a date or use a URL with a date", "warn");
+    return;
+  }
+  config.targets = targets;
+
+  chrome.storage.local.set({ config, sniping: true });
+  showStatus(`Armed! Opening ${targets.length} tabs...`, "info");
+
+  // Open one tab per date/time target.
+  for (const target of targets) {
+    chrome.tabs.create({ url: target.url, active: false });
   }
 });

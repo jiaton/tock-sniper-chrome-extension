@@ -1,10 +1,22 @@
 // Tock Sniper — content script
 // Simple logic:
-// - Before release time: show countdown, reload at release - 100ms
+// - Before release time: show countdown, reload at release - 75ms
 // - After release time (including after reload): immediately snipe
 
 let myDate = null;
+let myTarget = null;
 let overlay = null;
+let clockOffsetMs = 0;
+let clockSyncedAtPerf = 0;
+let clockSyncedAtServerMs = 0;
+const RELOAD_LEAD_MS = 75;
+const CLOCK_SYNC_SKIP_WINDOW_MS = 5000;
+const CLOCK_SYNC_TTL_MS = 5 * 60 * 1000;
+const CLOCK_SYNC_KEY = "tockClockSync";
+const CLOCK_SYNC_INTERVAL_MS = 30000;
+const FINAL_CALIBRATION_AT_MS = 15000;
+const CLOCK_SYNC_TIMEOUT_MS = 1200;
+const FINAL_CALIBRATION_SAMPLES = 3;
 
 function createOverlay() {
   overlay = document.createElement("div");
@@ -21,7 +33,12 @@ function createOverlay() {
         padding: 8px 12px; background: #16213e; font-weight: 700; font-size: 14px;
         display: flex; justify-content: space-between; align-items: center;
       }
-      #tock-sniper-overlay .ts-header span { opacity: 0.5; font-size: 11px; }
+      #tock-sniper-overlay .ts-header span { opacity: 0.65; font-size: 11px; text-align: right; }
+      #tock-sniper-overlay .ts-clock {
+        padding: 6px 12px; background: #101629; color: #b5d4ff; font-variant-numeric: tabular-nums;
+        display: grid; grid-template-columns: 1fr 1fr 0.8fr; gap: 6px; font-size: 11px;
+      }
+      #tock-sniper-overlay .ts-clock strong { color: #fff; font-weight: 700; display: block; }
       #tock-sniper-overlay .ts-log {
         padding: 8px 12px; max-height: 300px; overflow-y: auto; font-size: 12px;
       }
@@ -39,6 +56,11 @@ function createOverlay() {
       #tock-sniper-overlay .ts-status.error { background: #c92a2a; }
     </style>
     <div class="ts-header">🎯 Tock Sniper <span id="ts-date"></span></div>
+    <div class="ts-clock">
+      <div>Current<strong id="ts-now">--:--:--.---</strong></div>
+      <div>Countdown<strong id="ts-countdown">--:--.---</strong></div>
+      <div>Offset<strong id="ts-offset">--ms</strong></div>
+    </div>
     <div class="ts-status waiting" id="ts-status">Initializing...</div>
     <div class="ts-log" id="ts-log"></div>
   `;
@@ -53,7 +75,7 @@ function setStatus(text, type = "waiting") {
 function addLog(msg, type = "info") {
   const logEl = document.getElementById("ts-log");
   if (!logEl) return;
-  const time = new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const time = formatClock(nowMs());
   const entry = document.createElement("div");
   entry.className = `ts-entry ${type}`;
   entry.innerHTML = `<span class="ts-time">${time}</span>${msg}`;
@@ -68,6 +90,187 @@ const log = (msg, type = "info") => {
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const nowMs = () => (
+  clockSyncedAtServerMs
+    ? clockSyncedAtServerMs + performance.now() - clockSyncedAtPerf
+    : Date.now() + clockOffsetMs
+);
+
+function setClockSync(sync) {
+  clockOffsetMs = sync.offsetMs;
+  clockSyncedAtPerf = performance.now();
+  clockSyncedAtServerMs = Date.now() + clockOffsetMs;
+}
+
+function formatClock(ms) {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}.${String(d.getMilliseconds()).padStart(3, "0")}`;
+}
+
+function formatCountdown(ms) {
+  const sign = ms < 0 ? "-" : "";
+  const abs = Math.abs(ms);
+  const minutes = Math.floor(abs / 60000);
+  const seconds = Math.floor((abs % 60000) / 1000);
+  const millis = Math.floor(abs % 1000);
+  return `${sign}${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
+}
+
+function updateClock(releaseMs = 0) {
+  const nowEl = document.getElementById("ts-now");
+  const countdownEl = document.getElementById("ts-countdown");
+  const offsetEl = document.getElementById("ts-offset");
+  if (nowEl) nowEl.textContent = formatClock(nowMs());
+  if (countdownEl) countdownEl.textContent = releaseMs ? formatCountdown(releaseMs - nowMs()) : "--:--.---";
+  if (offsetEl) offsetEl.textContent = `${Math.round(clockOffsetMs)}ms`;
+}
+
+async function syncServerClock(reason = "sync") {
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), CLOCK_SYNC_TIMEOUT_MS);
+  try {
+    const res = await fetch(location.href, {
+      method: "HEAD",
+      cache: "no-store",
+      credentials: "include",
+      signal: controller.signal,
+    });
+    const serverDate = res.headers.get("date");
+    if (!serverDate) throw new Error("missing Date header");
+
+    const finishedAt = Date.now();
+    const midpoint = startedAt + (finishedAt - startedAt) / 2;
+    clockOffsetMs = new Date(serverDate).getTime() - midpoint;
+    const sync = {
+      offsetMs: clockOffsetMs,
+      sampledAt: finishedAt,
+      rttMs: finishedAt - startedAt,
+    };
+    const { best, replaced } = await saveBestClockSync(sync);
+    const suffix = replaced ? "" : `; kept best RTT ${best.rttMs}ms`;
+    log(`Clock ${reason}: sample ${Math.round(sync.offsetMs)}ms, RTT ${sync.rttMs}ms${suffix}`);
+    return true;
+  } catch (err) {
+    if (err.name !== "AbortError") {
+      log(`Clock ${reason} unavailable; using best known clock (${err.message})`, "error");
+    }
+    return false;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function saveBestClockSync(sync) {
+  let current = await readCachedClockSync();
+  if (current && Date.now() - current.sampledAt > CLOCK_SYNC_TTL_MS) current = null;
+  const shouldReplace = !current || sync.rttMs <= (current.rttMs ?? Infinity);
+  const best = shouldReplace ? sync : current;
+  setClockSync(best);
+  sessionStorage.setItem(CLOCK_SYNC_KEY, JSON.stringify(best));
+  await chrome.storage.local.set({ [CLOCK_SYNC_KEY]: best });
+  return { best, replaced: shouldReplace };
+}
+
+async function readCachedClockSync() {
+  const rawSessionSync = sessionStorage.getItem(CLOCK_SYNC_KEY);
+  let sessionSync = null;
+  try {
+    sessionSync = rawSessionSync ? JSON.parse(rawSessionSync) : null;
+  } catch {
+    sessionStorage.removeItem(CLOCK_SYNC_KEY);
+  }
+  const { [CLOCK_SYNC_KEY]: storedSync } = await chrome.storage.local.get(CLOCK_SYNC_KEY);
+  return sessionSync || storedSync || null;
+}
+
+async function useCachedClockSync() {
+  const sync = await readCachedClockSync();
+
+  if (!sync || typeof sync.offsetMs !== "number") return false;
+  if (Date.now() - sync.sampledAt > CLOCK_SYNC_TTL_MS) return false;
+
+  setClockSync(sync);
+  sessionStorage.setItem(CLOCK_SYNC_KEY, JSON.stringify(sync));
+  log(`Clock sync cached: ${Math.round(clockOffsetMs)}ms vs local, RTT ${sync.rttMs ?? "?"}ms`);
+  return true;
+}
+
+async function prepareClock(releaseMs) {
+  if (await useCachedClockSync()) return;
+
+  const localRemaining = releaseMs ? releaseMs - Date.now() : Infinity;
+  if (releaseMs && localRemaining <= CLOCK_SYNC_SKIP_WINDOW_MS) {
+    log(`Skipping clock sync inside final ${CLOCK_SYNC_SKIP_WINDOW_MS}ms window`);
+    return;
+  }
+
+  await syncServerClock("initial");
+}
+
+function scheduleClockCalibration(releaseMs) {
+  if (!releaseMs) return () => {};
+
+  const timers = [];
+  const runIfSafe = (reason) => {
+    if (releaseMs - nowMs() <= CLOCK_SYNC_SKIP_WINDOW_MS) return;
+    syncServerClock(reason);
+  };
+
+  const intervalId = setInterval(() => runIfSafe("refresh"), CLOCK_SYNC_INTERVAL_MS);
+  timers.push(() => clearInterval(intervalId));
+
+  const finalDelay = releaseMs - FINAL_CALIBRATION_AT_MS - nowMs();
+  if (finalDelay > 0) {
+    const finalTimer = setTimeout(async () => {
+      log(`Final clock calibration: ${FINAL_CALIBRATION_SAMPLES} samples`);
+      for (let i = 0; i < FINAL_CALIBRATION_SAMPLES; i++) {
+        if (releaseMs - nowMs() <= CLOCK_SYNC_SKIP_WINDOW_MS) break;
+        await syncServerClock(`final ${i + 1}/${FINAL_CALIBRATION_SAMPLES}`);
+        await sleep(150);
+      }
+      log("Clock calibration frozen for final window");
+    }, finalDelay);
+    timers.push(() => clearTimeout(finalTimer));
+  }
+
+  const freezeDelay = releaseMs - CLOCK_SYNC_SKIP_WINDOW_MS - nowMs();
+  if (freezeDelay > 0) {
+    const freezeTimer = setTimeout(() => {
+      timers.forEach((clear) => clear());
+      log("Clock calibration frozen");
+    }, freezeDelay);
+    timers.push(() => clearTimeout(freezeTimer));
+  }
+
+  return () => timers.forEach((clear) => clear());
+}
+
+function targetFromUrl() {
+  const url = new URL(location.href);
+  const date = url.searchParams.get("date");
+  const timeParam = url.searchParams.get("time");
+  return {
+    date,
+    timeParam,
+    time: timeParamToDisplay(timeParam),
+    hasUrlDate: Boolean(date),
+  };
+}
+
+function timeParamToDisplay(timeParam) {
+  const match = timeParam?.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  if (!match) return "";
+  let hour = parseInt(match[1], 10);
+  const minute = match[2];
+  const meridiem = hour >= 12 ? "PM" : "AM";
+  hour = hour % 12 || 12;
+  return `${hour}:${minute} ${meridiem}`;
+}
+
+function targetLabel(target) {
+  return [target.date, target.time].filter(Boolean).join(" ");
+}
 
 function getConfig() {
   return new Promise((r) => chrome.storage.local.get("config", (d) => r(d.config || {})));
@@ -78,63 +281,96 @@ async function run() {
   if (!sniping) return;
 
   const config = await getConfig();
-  if (!config.dates?.length) return;
+  if (!config.dates?.length && !config.targets?.length) return;
 
-  // Pick date for this tab from sessionStorage (survives reload) or claim a new one
-  myDate = sessionStorage.getItem("tockSniperDate");
-  if (!myDate) {
-    const idx = parseInt(sessionStorage.getItem("tockSniperIdx") ?? "-1");
+  // Pick target for this tab from URL/sessionStorage (survives reload) or claim a new one.
+  const urlTarget = targetFromUrl();
+  const storedTarget = sessionStorage.getItem("tockSniperTarget");
+  myTarget = storedTarget ? JSON.parse(storedTarget) : null;
+
+  if (!myTarget && urlTarget.date) {
+    myTarget = urlTarget;
+  }
+
+  if (!myTarget) {
+    const targets = config.targets || config.dates.map((date) => ({ date, time: "" }));
+    const idx = parseInt(sessionStorage.getItem("tockSniperIdx") ?? "-1", 10);
     if (idx >= 0) {
-      myDate = config.dates[idx];
+      myTarget = targets[idx];
     } else {
       // Claim next unclaimed index via storage
       const { tockNextIdx = 0 } = await chrome.storage.local.get("tockNextIdx");
-      myDate = config.dates[tockNextIdx % config.dates.length];
+      myTarget = targets[tockNextIdx % targets.length];
       await chrome.storage.local.set({ tockNextIdx: tockNextIdx + 1 });
-      sessionStorage.setItem("tockSniperIdx", String(tockNextIdx % config.dates.length));
+      sessionStorage.setItem("tockSniperIdx", String(tockNextIdx % targets.length));
     }
-    sessionStorage.setItem("tockSniperDate", myDate);
   }
+  if (urlTarget.time && !myTarget.time) myTarget.time = urlTarget.time;
+  myTarget.hasUrlDate = urlTarget.date === myTarget.date;
+  myDate = myTarget.date;
+  sessionStorage.setItem("tockSniperTarget", JSON.stringify(myTarget));
+  sessionStorage.setItem("tockSniperDate", myDate);
 
   createOverlay();
-  document.getElementById("ts-date").textContent = myDate;
-  document.title = `🎯 ${myDate} | ${document.title}`;
+  document.getElementById("ts-date").textContent = targetLabel(myTarget);
+  document.title = `🎯 ${targetLabel(myTarget)} | ${document.title}`;
+  const releaseMs = config.releaseTime ? new Date(config.releaseTime).getTime() : 0;
+  await prepareClock(releaseMs);
 
   if (location.href.includes("/checkout/")) {
-    document.title = `✅ ${myDate} — CHECKOUT`;
+    document.title = `✅ ${targetLabel(myTarget)} — CHECKOUT`;
     setStatus("🛒 CHECKOUT — Complete payment!", "success");
     log("Already on checkout!", "success");
     return;
   }
 
-  const releaseMs = config.releaseTime ? new Date(config.releaseTime).getTime() : 0;
-
   // PAST release time (or no release time set) → snipe immediately
-  if (!releaseMs || Date.now() >= releaseMs) {
+  updateClock(releaseMs);
+  const clockInterval = setInterval(() => updateClock(releaseMs), 50);
+
+  if (!releaseMs || nowMs() >= releaseMs) {
     setStatus("🎯 Sniping NOW!", "running");
     log("GO — sniping immediately!");
     await snipe(config);
+    clearInterval(clockInterval);
     return;
   }
 
   // FUTURE release time → countdown then reload
-  const delay = releaseMs - 100 - Date.now();
+  const stopClockCalibration = scheduleClockCalibration(releaseMs);
+  const delay = releaseMs - RELOAD_LEAD_MS - nowMs();
   const releaseStr = new Date(config.releaseTime).toLocaleTimeString();
+  if (delay <= 0) {
+    stopClockCalibration();
+    const waitMs = Math.max(0, releaseMs - nowMs());
+    setStatus(`⏰ Release in ${formatCountdown(waitMs)}`, "waiting");
+    log(`Inside reload lead window; waiting ${formatCountdown(waitMs)} to snipe`);
+    setTimeout(async () => {
+      setStatus("🎯 Sniping NOW!", "running");
+      log("GO — sniping immediately!");
+      await snipe(config);
+      clearInterval(clockInterval);
+    }, waitMs);
+    return;
+  }
+
   setStatus(`⏰ Reload at ${releaseStr}`, "waiting");
-  log(`Waiting ${Math.round(delay / 1000)}s — reload 100ms before release`);
+  log(`Waiting ${formatCountdown(delay)} — reload ${RELOAD_LEAD_MS}ms before release`);
 
   const countdownInterval = setInterval(() => {
-    const remaining = releaseMs - 100 - Date.now();
+    const remaining = releaseMs - RELOAD_LEAD_MS - nowMs();
     if (remaining <= 0) { clearInterval(countdownInterval); return; }
-    setStatus(`⏰ Reload in ${Math.ceil(remaining / 1000)}s`, "waiting");
-  }, 1000);
+    setStatus(`⏰ Reload in ${formatCountdown(remaining)}`, "waiting");
+  }, 50);
 
   setTimeout(() => {
     clearInterval(countdownInterval);
+    clearInterval(clockInterval);
+    stopClockCalibration();
     setStatus("🔄 RELOADING!", "running");
     log("⚡ Reloading NOW!");
     location.reload();
-  }, delay);
+  }, Math.max(0, delay));
 }
 
 async function snipe(config) {
@@ -166,37 +402,41 @@ async function snipe(config) {
   }
   if (!dialog) { setStatus("❌ Dialog failed", "error"); log("Dialog didn't open", "error"); return; }
   log("📋 Dialog opened");
-  await sleep(500);
+  await sleep(myTarget.hasUrlDate ? 100 : 500);
 
   // Step 3: Select date — retry up to 10s, navigate months if needed
-  let dateFound = false;
-  const dateDeadline = Date.now() + 10000;
-  while (Date.now() < dateDeadline) {
-    const dateBtn = dialog.querySelector(`button[aria-label="${myDate}"]`);
-    if (dateBtn) {
-      if (dateBtn.disabled) {
-        setStatus(`❌ ${myDate} sold out`, "error");
-        log(`${myDate} is disabled/sold out`, "error");
-        return;
+  if (myTarget.hasUrlDate) {
+    log(`📅 URL date active: ${myDate}`);
+  } else {
+    let dateFound = false;
+    const dateDeadline = Date.now() + 10000;
+    while (Date.now() < dateDeadline) {
+      const dateBtn = dialog.querySelector(`button[aria-label="${myDate}"]`);
+      if (dateBtn) {
+        if (dateBtn.disabled) {
+          setStatus(`❌ ${myDate} sold out`, "error");
+          log(`${myDate} is disabled/sold out`, "error");
+          return;
+        }
+        log(`📅 Clicking date: ${myDate}`);
+        dateBtn.click();
+        dateFound = true;
+        break;
       }
-      log(`📅 Clicking date: ${myDate}`);
-      dateBtn.click();
-      dateFound = true;
-      break;
+      const nextBtn = dialog.querySelector('button[aria-label="Go to next month"]');
+      if (nextBtn && !nextBtn.disabled) {
+        log("📅 Next month...");
+        nextBtn.click();
+        await sleep(600);
+      } else {
+        await sleep(300);
+      }
     }
-    const nextBtn = dialog.querySelector('button[aria-label="Go to next month"]');
-    if (nextBtn && !nextBtn.disabled) {
-      log("📅 Next month...");
-      nextBtn.click();
-      await sleep(600);
-    } else {
-      await sleep(300);
+    if (!dateFound) {
+      setStatus("❌ Date not found", "error");
+      log(`Could not find ${myDate} on calendar`, "error");
+      return;
     }
-  }
-  if (!dateFound) {
-    setStatus("❌ Date not found", "error");
-    log(`Could not find ${myDate} on calendar`, "error");
-    return;
   }
 
   // Step 4: Wait for time slots
@@ -242,7 +482,8 @@ async function snipe(config) {
   log(`🕐 Slots: ${slots.map((s) => s.time).join(", ")}`);
 
   let chosen = slots[slots.length - 1];
-  for (const pref of (config.prefTimes || [])) {
+  const preferredTimes = [myTarget.time, ...(config.prefTimes || [])].filter(Boolean);
+  for (const pref of preferredTimes) {
     const match = slots.find((s) => s.time.includes(pref));
     if (match) { log(`🎯 Matched: ${match.time}`); chosen = match; break; }
   }
@@ -265,7 +506,7 @@ async function snipe(config) {
   // Step 8: Check for checkout
   await sleep(3000);
   if (location.href.includes("/checkout/")) {
-    document.title = `✅ ${myDate} ${chosen.time} — CHECKOUT`;
+    document.title = `✅ ${targetLabel(myTarget)} ${chosen.time} — CHECKOUT`;
     setStatus(`🛒 GOT IT! ${chosen.time} — CHECKOUT`, "success");
     log(`🛒 Got ${chosen.time}! Complete checkout now.`, "success");
   } else {

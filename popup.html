@@ -34,17 +34,18 @@
 
   <label>Restaurant URL</label>
   <input id="url" placeholder="https://www.exploretock.com/your-restaurant" />
+  <small>URLs with date, size, and time are used directly.</small>
 
   <label>Party Size</label>
   <input id="partySize" type="number" min="1" max="20" value="2" />
 
   <label>Release Time</label>
   <input id="releaseTime" type="datetime-local" step="1" />
-  <small>Auto-refreshes 500ms before this time.</small>
+  <small>Uses an exploretock.com server clock estimate when available.</small>
 
-  <label>Preferred Times (all tabs)</label>
-  <input id="prefTimes" placeholder="e.g. 7:00 PM, 8:00 PM" />
-  <small>Tries in order. Fallback = latest available.</small>
+  <label>Target Times</label>
+  <input id="prefTimes" placeholder="e.g. 5:00 PM, 8:00 PM" />
+  <small>Opens one tab for every date/time pair.</small>
 
   <div id="slots"></div>
   <button class="add-btn" id="addSlot">+ Add Date</button>

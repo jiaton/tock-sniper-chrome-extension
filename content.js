@@ -290,28 +290,24 @@ async function run() {
   const config = await getConfig();
   if (!config.dates?.length && !config.targets?.length) return;
 
-  // Pick target for this tab from URL/sessionStorage (survives reload) or claim a new one.
-  const urlTarget = targetFromUrl();
+  // Pick target for this tab: use _tidx from URL (set by popup) or restore from sessionStorage after reload.
   const storedTarget = sessionStorage.getItem("tockSniperTarget");
   myTarget = storedTarget ? JSON.parse(storedTarget) : null;
 
-  if (!myTarget && urlTarget.date) {
-    myTarget = urlTarget;
-  }
-
   if (!myTarget) {
-    const targets = config.targets || config.dates.map((date) => ({ date, time: "" }));
-    const idx = parseInt(sessionStorage.getItem("tockSniperIdx") ?? "-1", 10);
-    if (idx >= 0) {
-      myTarget = targets[idx];
+    const targets = config.targets || config.dates.map((date) => ({ date, time: "", mode: "api" }));
+    const url = new URL(location.href);
+    const tidx = url.searchParams.get("_tidx");
+    if (tidx !== null) {
+      myTarget = targets[parseInt(tidx, 10)] || targets[0];
     } else {
-      // Claim next unclaimed index via storage
-      const { tockNextIdx = 0 } = await chrome.storage.local.get("tockNextIdx");
-      myTarget = targets[tockNextIdx % targets.length];
-      await chrome.storage.local.set({ tockNextIdx: tockNextIdx + 1 });
-      sessionStorage.setItem("tockSniperIdx", String(tockNextIdx % targets.length));
+      // Fallback: use URL date/time to find matching target
+      const urlTarget = targetFromUrl();
+      myTarget = targets.find((t) => t.date === urlTarget.date) || targets[0];
     }
   }
+
+  const urlTarget = targetFromUrl();
   if (urlTarget.time && !myTarget.time) myTarget.time = urlTarget.time;
   myTarget.hasUrlDate = urlTarget.date === myTarget.date;
   myDate = myTarget.date;

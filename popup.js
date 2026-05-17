@@ -271,7 +271,9 @@ $("#startBtn").addEventListener("click", async () => {
   chrome.storage.local.set({ config, sniping: true });
   showStatus(`Armed! Opening ${targets.length} tab${targets.length !== 1 ? "s" : ""}...`, "info");
 
-  for (const target of targets) {
-    chrome.tabs.create({ url: target.url, active: false });
+  for (let i = 0; i < targets.length; i++) {
+    const url = new URL(targets[i].url);
+    url.searchParams.set("_tidx", String(i));
+    chrome.tabs.create({ url: url.toString(), active: false });
   }
 });

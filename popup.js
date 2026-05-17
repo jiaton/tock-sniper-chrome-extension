@@ -263,10 +263,23 @@ $("#startBtn").addEventListener("click", async () => {
   config.targets = targets;
 
   chrome.storage.local.set({ config, sniping: true });
-  showStatus(`Armed! Opening ${targets.length} tabs...`, "info");
 
-  // Open one tab per date/time target.
-  for (const target of targets) {
-    chrome.tabs.create({ url: target.url, active: false });
+  // In "both" mode, open 2 tabs per target: one API, one DOM
+  if (config.snipeMode === "both") {
+    const totalTabs = targets.length * 2;
+    showStatus(`Armed! Opening ${totalTabs} tabs (API + DOM)...`, "info");
+    for (const target of targets) {
+      const apiUrl = new URL(target.url);
+      apiUrl.searchParams.set("_snipeMode", "api");
+      chrome.tabs.create({ url: apiUrl.toString(), active: false });
+      const domUrl = new URL(target.url);
+      domUrl.searchParams.set("_snipeMode", "dom");
+      chrome.tabs.create({ url: domUrl.toString(), active: false });
+    }
+  } else {
+    showStatus(`Armed! Opening ${targets.length} tabs...`, "info");
+    for (const target of targets) {
+      chrome.tabs.create({ url: target.url, active: false });
+    }
   }
 });

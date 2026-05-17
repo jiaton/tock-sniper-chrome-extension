@@ -361,7 +361,7 @@ async function run() {
     return;
   }
 
-  const mode = config.snipeMode || "api";
+  const mode = new URL(location.href).searchParams.get("_snipeMode") || config.snipeMode || "api";
   const needsReload = mode === "dom";
 
   if (needsReload) {
@@ -408,16 +408,20 @@ async function run() {
 }
 
 async function snipe(config) {
-  const mode = config.snipeMode || "api";
-  if (mode === "api" || mode === "both") {
+  // Per-tab mode override (used in "both" mode where each tab gets its own mode)
+  const urlMode = new URL(location.href).searchParams.get("_snipeMode");
+  const mode = urlMode || config.snipeMode || "api";
+
+  if (mode === "api") {
     const success = await snipeApi(config);
-    if (success) return;
-    if (mode === "api") {
-      setStatus("⚠️ API failed — check manually", "error");
-      return;
-    }
-    log("API snipe failed, falling back to DOM...", "error");
+    if (!success) setStatus("⚠️ API failed — check manually", "error");
+    return;
   }
+  if (mode === "dom") {
+    await snipeDom(config);
+    return;
+  }
+  // Shouldn't reach here, but fallback
   await snipeDom(config);
 }
 

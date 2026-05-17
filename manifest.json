@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Tock Sniper",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Auto-grab Tock reservations the instant they drop. Set target dates, preferred times, and release time.",
   "permissions": ["storage", "alarms"],
   "action": {

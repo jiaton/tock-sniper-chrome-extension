@@ -12,7 +12,8 @@ function addSlotUI(date = "") {
     </div>
     <input type="date" class="slot-date" value="${date}" />
   `;
-  div.querySelector(".remove-btn").addEventListener("click", () => div.remove());
+  div.querySelector(".remove-btn").addEventListener("click", () => { div.remove(); updateButton(); saveConfig(); });
+  div.querySelector(".slot-date").addEventListener("input", saveConfig);
   $("#slots").appendChild(div);
 }
 
@@ -183,11 +184,28 @@ function syncFieldsFromUrl() {
 $("#addSlot").addEventListener("click", () => {
   addSlotUI();
   updateButton();
+  saveConfig();
 });
 
-$("#url").addEventListener("change", syncFieldsFromUrl);
-$("#url").addEventListener("blur", syncFieldsFromUrl);
-$("#prefTimes").addEventListener("input", () => updateButton());
+$("#url").addEventListener("change", () => { syncFieldsFromUrl(); saveConfig(); });
+$("#url").addEventListener("blur", () => { syncFieldsFromUrl(); saveConfig(); });
+$("#prefTimes").addEventListener("input", () => { updateButton(); saveConfig(); });
+$("#partySize").addEventListener("input", saveConfig);
+$("#releaseTime").addEventListener("input", saveConfig);
+$("#snipeMode").addEventListener("change", saveConfig);
+
+function saveConfig() {
+  const dates = [...$$(".slot-date")].map((el) => el.value).filter(Boolean);
+  const config = {
+    url: $("#url").value.trim(),
+    partySize: parseInt($("#partySize").value) || 2,
+    releaseTime: $("#releaseTime").value,
+    prefTimes: parseCsv($("#prefTimes").value),
+    snipeMode: $("#snipeMode").value,
+    dates,
+  };
+  chrome.storage.local.set({ config });
+}
 
 $("#startBtn").addEventListener("click", async () => {
   const armed = (await chrome.storage.local.get("sniping")).sniping;

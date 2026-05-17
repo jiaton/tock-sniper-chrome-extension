@@ -3,28 +3,74 @@
 ## Purpose
 Auto-grab reservations on Tock (exploretock.com) the instant slots drop. Works with any Tock restaurant.
 
-## Architecture: Multi-Tab Sniping
-- Popup opens **one tab per target date/time pair**
-- If the Tock URL includes `date`, `size`, and `time`, tabs open with those query params already set
-- Each tab independently: waits for release time → reloads → clicks "Book now" → uses URL-selected date when available → picks target time → reaches checkout
-- Tab title shows status: 🎯 = waiting, ✅ = checkout reached
+## Architecture
+
+### Data Flow
+```
+popup.js (config UI)
+    │
+    ├── Saves config to chrome.storage.local
+    │   { url, partySize, releaseTime, prefTimes, snipeMode, experienceId, dates, targets[] }
+    │
+    └── On "Arm": builds targets[], opens one tab per target with ?_tidx=N
+                  Each target has: { date, time, experienceId, mode, url }
+
+chrome.storage.local (shared)
+    │
+    └── config.targets[N] — full target list, indexed by _tidx
+
+content.js (per tab)
+    │
+    ├── First load: reads _tidx from URL → gets config.targets[_tidx]
+    │   Saves to sessionStorage (survives reload)
+    │
+    ├── After reload: reads from sessionStorage (no race, no shared state)
+    │
+    └── At release time: executes myTarget.mode ("api" or "dom")
+```
+
+### Target Assignment
+- Popup assigns each tab a **deterministic index** via `?_tidx=N` in the URL
+- Content script reads `_tidx` once, looks up `config.targets[N]`, saves to sessionStorage
+- After reload (DOM mode), target is restored from sessionStorage
+- No race conditions, no shared counters
+
+### Snipe Modes
+| Mode | Tabs per date/time | Behavior |
+|------|-------------------|----------|
+| ⚡ API Direct | 1 | No reload. Fires `PUT /api/ticket/group/lock` at release. Retries 5× over 1s. |
+| 🖱️ DOM Click | 1 | Reloads 75ms before release. Clicks through booking dialog UI. |
+| 🔥 Both | 2 | Opens separate API + DOM tabs. They run in parallel, independently. |
+
+### Tab Lifecycle
+```
+API mode:  load page → wait → fire lock request → navigate to /checkout
+DOM mode:  load page → wait → reload at release-75ms → click dialog → checkout
+```
 
 ## Files
 ```
 tock-sniper-ext/
-├── manifest.json      # MV3, content script on exploretock.com
-├── popup.html         # Config UI: URL, party size, release time, dates
-├── popup.js           # Multi-date config, opens N tabs on arm
-├── content.js         # Core logic — auto-reload, date selection, time slot picking
-├── background.js      # Keepalive alarm, clears state on arm/disarm
-├── icons/             # 16, 48, 128px icons
-└── AGENTS.md          # This file
+├── manifest.json          # MV3, content script on exploretock.com
+├── popup.html             # Config UI: URL, experience ID, party size, release time, dates, mode
+├── popup.js               # Builds targets[], opens tabs with _tidx, auto-saves config
+├── content.js             # Per-tab snipe logic (API direct or DOM click)
+├── background.js          # Keepalive alarm, clears state on arm/disarm
+├── icons/                 # 16, 48, 128px icons
+├── .github/workflows/     # CI: builds zip, auto-tags from manifest version
+└── AGENTS.md              # This file
 ```
 
-## Key DOM Selectors (verified on live Tock)
+## Content Script Flow
+1. **On load**: claim target via `_tidx` URL param, show overlay with countdown
+2. **Before release**: clock sync (HEAD request for Date header), calibration samples
+3. **At release time** (per `myTarget.mode`):
+   - **API**: fires `PUT /api/ticket/group/lock` (30 bytes protobuf), retries 5× / 250ms, navigates to checkout on success
+   - **DOM**: reloads at release - 75ms, waits for dialog auto-open (from /search URL), picks time slot, clicks Book
+
+## Key DOM Selectors (for DOM mode)
 | Element | Selector |
 |---------|----------|
-| "Book now" link | `a` with `textContent === "Book now"` |
 | Booking dialog | `[role="dialog"]` |
 | Calendar date button | `button[aria-label="YYYY-MM-DD"]` |
 | Next month button | `button[aria-label="Go to next month"]` |
@@ -32,20 +78,6 @@ tock-sniper-ext/
 | Party size text | `<p>` matching `/\d+\s*guest/` |
 | More/fewer guests | `button[aria-label="More guests"]` / `button[aria-label="Fewer guests"]` |
 | Checkout page | URL contains `/checkout/` |
-
-## Content Script Flow
-1. **Before release time**: estimate exploretock.com clock offset, keep the lowest-RTT sample, show millisecond countdown overlay, freeze calibration in the final 5s
-2. **At release time** (mode-dependent):
-   - **API mode**: fires `PUT /api/ticket/group/lock` directly (no reload), retries 5× over 1s
-   - **DOM mode**: reloads at release - 75ms, then clicks through UI
-   - **Both mode**: tries API first, falls back to DOM on failure
-
-## Snipe Modes
-| Mode | Speed | Method |
-|------|-------|--------|
-| ⚡ API Direct | ~50ms | Sends protobuf lock request, navigates to checkout |
-| 🖱️ DOM Click | ~2s | Waits for dialog, clicks Book button |
-| 🔥 Both | ~50ms + fallback | API first, DOM if API fails |
 
 ## Tock API — Booking Protocol (proto2 over HTTP)
 
@@ -59,8 +91,6 @@ accept: application/octet-stream
 x-tock-stream-format: proto2
 x-tock-scope: {"businessId":"<id>","businessGroupId":"<id>","site":"EXPLORETOCK"}
 x-tock-path: <current path>
-x-tock-session: <from cookie/page>
-x-tock-fingerprint: <from page>
 x-tock-build-number: <from page, e.g. 2026-05-08RC12-00>
 ```
 Session, fingerprint, and cookies are sent automatically via `credentials: "include"`.
@@ -86,7 +116,7 @@ Wrapper: field 60051 {
 }
 ```
 **~30 bytes total. This is the only call needed at release time.**
-On success, the slot is held for ~10 minutes.
+On success, the slot is held for ~10 minutes. Retried 5× every 250ms to cover timing uncertainty.
 
 #### 3. `POST /api/ticket/price/consumer` — Finalize cart
 ```
@@ -116,10 +146,19 @@ Messages use varint-encoded tags: `(field_number << 3) | wire_type`
 - Wire 0 = varint, Wire 2 = length-delimited (strings, nested messages)
 - High field numbers (60020, 60051, 60602) are used as message type envelopes
 
+## URL Generation
+Popup generates `/search` URLs so Tock auto-opens the booking dialog:
+```
+https://www.exploretock.com/<restaurant>/search?date=2026-05-23&size=2&time=20%3A00&_tidx=0
+```
+- `/search` path → dialog auto-opens (no "Book now" click needed)
+- `_tidx=N` → deterministic target assignment for the content script
+
 ## Usage
 1. Click extension icon
-2. Enter the Tock restaurant URL
-3. Set release time, party size, preferred times, and target dates
-4. Click "Arm Sniper" — opens tabs
-5. Tabs auto-reload at release time and race through booking
-6. Complete payment on whichever tab reaches checkout
+2. Paste Tock restaurant URL (experience ID auto-parsed)
+3. Set release time, party size, preferred times, target dates
+4. Select snipe mode (API / DOM / Both)
+5. Click "Arm Sniper" — opens tabs
+6. Tabs fire at release time (API locks slot instantly, DOM clicks through UI)
+7. Complete payment on whichever tab reaches checkout first ✅

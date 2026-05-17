@@ -78,7 +78,8 @@ function updateButton(armed) {
   const btn = $("#startBtn");
   const count = $$(".slot-date").length;
   const timeCount = Math.max(1, parseCsv($("#prefTimes").value || "").length);
-  const tabCount = Math.max(1, count) * timeCount;
+  const modeMultiplier = $("#snipeMode").value === "both" ? 2 : 1;
+  const tabCount = Math.max(1, count) * timeCount * modeMultiplier;
   btn.textContent = armed ? "⏹ Disarm All" : `⚡ Arm Sniper (opens ${tabCount} tab${tabCount !== 1 ? "s" : ""})`;
   btn.className = armed ? "active" : "";
 }
@@ -153,16 +154,20 @@ function buildTargets(config) {
   const expMatch = base.pathname.match(/\/experience\/(\d+)/);
   const experienceId = config.experienceId || (expMatch ? parseInt(expMatch[1], 10) : null);
 
+  // Determine modes: "both" → one api + one dom target per date/time
+  const modes = config.snipeMode === "both" ? ["api", "dom"] : [config.snipeMode || "api"];
+
   return dates.flatMap((date) => {
     const dateTimes = times.length ? times : [""];
-    return dateTimes.map((time) => {
+    return dateTimes.flatMap((time) => {
       const normalizedTime = paramTimeToDisplay(displayTimeToParam(time)) || time;
-      return {
+      return modes.map((mode) => ({
         date,
         time: normalizedTime,
         experienceId,
+        mode,
         url: buildTargetUrl(config.url, date, config.partySize, normalizedTime),
-      };
+      }));
     });
   });
 }
@@ -261,25 +266,12 @@ $("#startBtn").addEventListener("click", async () => {
     return;
   }
   config.targets = targets;
+  config.experienceId = parseInt($("#experienceId").value) || null;
 
   chrome.storage.local.set({ config, sniping: true });
+  showStatus(`Armed! Opening ${targets.length} tab${targets.length !== 1 ? "s" : ""}...`, "info");
 
-  // In "both" mode, open 2 tabs per target: one API, one DOM
-  if (config.snipeMode === "both") {
-    const totalTabs = targets.length * 2;
-    showStatus(`Armed! Opening ${totalTabs} tabs (API + DOM)...`, "info");
-    for (const target of targets) {
-      const apiUrl = new URL(target.url);
-      apiUrl.searchParams.set("_snipeMode", "api");
-      chrome.tabs.create({ url: apiUrl.toString(), active: false });
-      const domUrl = new URL(target.url);
-      domUrl.searchParams.set("_snipeMode", "dom");
-      chrome.tabs.create({ url: domUrl.toString(), active: false });
-    }
-  } else {
-    showStatus(`Armed! Opening ${targets.length} tabs...`, "info");
-    for (const target of targets) {
-      chrome.tabs.create({ url: target.url, active: false });
-    }
+  for (const target of targets) {
+    chrome.tabs.create({ url: target.url, active: false });
   }
 });

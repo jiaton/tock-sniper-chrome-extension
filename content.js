@@ -319,8 +319,9 @@ async function run() {
   sessionStorage.setItem("tockSniperDate", myDate);
 
   createOverlay();
-  document.getElementById("ts-date").textContent = targetLabel(myTarget);
-  document.title = `🎯 ${targetLabel(myTarget)} | ${document.title}`;
+  const modeLabel = myTarget.mode === "api" ? "⚡API" : "🖱️DOM";
+  document.getElementById("ts-date").textContent = `${targetLabel(myTarget)} [${modeLabel}]`;
+  document.title = `🎯 ${targetLabel(myTarget)} ${modeLabel} | ${document.title}`;
   const releaseMs = config.releaseTime ? new Date(config.releaseTime).getTime() : 0;
   await prepareClock(releaseMs);
 
@@ -361,8 +362,7 @@ async function run() {
     return;
   }
 
-  const mode = new URL(location.href).searchParams.get("_snipeMode") || (config.snipeMode === "both" ? "api" : config.snipeMode) || "api";
-  const needsReload = mode === "dom";
+  const needsReload = (myTarget.mode || "api") === "dom";
 
   if (needsReload) {
     setStatus(`⏰ Reload at ${releaseStr}`, "waiting");
@@ -408,10 +408,7 @@ async function run() {
 }
 
 async function snipe(config) {
-  // Per-tab mode override (used in "both" mode where each tab gets its own mode)
-  const urlMode = new URL(location.href).searchParams.get("_snipeMode");
-  const mode = urlMode || (config.snipeMode === "both" ? "api" : config.snipeMode) || "api";
-
+  const mode = myTarget.mode || "api";
   if (mode === "api") {
     const success = await snipeApi(config);
     if (!success) setStatus("⚠️ API failed — check manually", "error");

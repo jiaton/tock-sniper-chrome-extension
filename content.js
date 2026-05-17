@@ -324,7 +324,18 @@ async function run() {
   if (location.href.includes("/checkout/")) {
     document.title = `✅ ${targetLabel(myTarget)} — CHECKOUT`;
     setStatus("🛒 CHECKOUT — Complete payment!", "success");
-    log("Already on checkout!", "success");
+    // Show API lock result from before navigation
+    const lockResult = sessionStorage.getItem("tockLockResult");
+    if (lockResult) {
+      const r = JSON.parse(lockResult);
+      if (r.ok) {
+        log(`🔒 Lock succeeded (attempt ${r.attempt}): ${r.summary}`, "success");
+      } else {
+        log(`🔒 Lock failed: ${r.summary}`, "error");
+      }
+    } else {
+      log("On checkout (no lock result stored — may be from DOM mode)", "info");
+    }
     // Verify there's actually a booking — check for error states after page settles
     setTimeout(() => {
       const body = document.body?.textContent || "";
@@ -630,6 +641,8 @@ async function snipeApi(config) {
         const summary = summarizeLockResponse(resData);
         log(`✅ API lock success! Attempt ${attempt}: ${summary}`, "success");
         setStatus("🛒 Slot locked! Loading checkout...", "success");
+        // Persist result for checkout page
+        sessionStorage.setItem("tockLockResult", JSON.stringify({ ok: true, attempt, summary }));
         const bizSlug = location.pathname.split("/")[1];
         location.href = `/${bizSlug}/checkout/confirm-purchase`;
         await sleep(5000);
@@ -652,6 +665,7 @@ async function snipeApi(config) {
   }
 
   log("❌ API lock failed after all attempts", "error");
+  sessionStorage.setItem("tockLockResult", JSON.stringify({ ok: false, summary: "All attempts failed" }));
   return false;
 }
 

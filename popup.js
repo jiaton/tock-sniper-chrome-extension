@@ -49,6 +49,7 @@ chrome.storage.local.get(["config", "sniping", "status"], (d) => {
     $("#releaseTime").value = d.config.releaseTime || defaultReleaseTime();
     $("#prefTimes").value = (d.config.prefTimes || []).join(", ");
     $("#snipeMode").value = d.config.snipeMode || "api";
+    $("#experienceId").value = d.config.experienceId || "";
     (d.config.dates || []).forEach((dt) => addSlotUI(dt));
   } else {
     $("#releaseTime").value = defaultReleaseTime();
@@ -140,9 +141,9 @@ function buildTargets(config) {
   const dates = config.dates.length ? config.dates : [urlDate].filter(Boolean);
   const times = config.prefTimes.length ? config.prefTimes : [urlTime].filter(Boolean);
 
-  // Extract experience ID from original URL
+  // Extract experience ID from original URL or use saved config value
   const expMatch = base.pathname.match(/\/experience\/(\d+)/);
-  const experienceId = expMatch ? parseInt(expMatch[1], 10) : null;
+  const experienceId = config.experienceId || (expMatch ? parseInt(expMatch[1], 10) : null);
 
   return dates.flatMap((date) => {
     const dateTimes = times.length ? times : [""];
@@ -165,6 +166,12 @@ function syncFieldsFromUrl() {
   const urlDate = parsed.searchParams.get("date");
   const urlSize = parsed.searchParams.get("size");
   const urlTime = paramTimeToDisplay(parsed.searchParams.get("time"));
+
+  // Extract experience ID from URL path
+  const expMatch = parsed.pathname.match(/\/experience\/(\d+)/);
+  if (expMatch) {
+    $("#experienceId").value = expMatch[1];
+  }
 
   if (urlSize) $("#partySize").value = urlSize;
   if (urlTime && !$("#prefTimes").value.trim()) $("#prefTimes").value = urlTime;
@@ -193,6 +200,7 @@ $("#prefTimes").addEventListener("input", () => { updateButton(); saveConfig(); 
 $("#partySize").addEventListener("input", saveConfig);
 $("#releaseTime").addEventListener("input", saveConfig);
 $("#snipeMode").addEventListener("change", saveConfig);
+$("#experienceId").addEventListener("input", saveConfig);
 
 function saveConfig() {
   const dates = [...$$(".slot-date")].map((el) => el.value).filter(Boolean);
@@ -202,6 +210,7 @@ function saveConfig() {
     releaseTime: $("#releaseTime").value,
     prefTimes: parseCsv($("#prefTimes").value),
     snipeMode: $("#snipeMode").value,
+    experienceId: parseInt($("#experienceId").value) || null,
     dates,
   };
   chrome.storage.local.set({ config });

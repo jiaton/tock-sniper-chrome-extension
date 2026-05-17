@@ -507,12 +507,14 @@ function buildLockRequest(partySize, datetime, experienceId) {
   return new Uint8Array(encodeLengthDelimited(60051, inner));
 }
 
-function extractExperienceId() {
+function extractExperienceId(config) {
+  // From config (user-verified in popup)
+  if (config?.experienceId) return config.experienceId;
+  // From target (stored from original URL)
+  if (myTarget?.experienceId) return myTarget.experienceId;
   // From URL path: /experience/296772/...
   const m = location.pathname.match(/\/experience\/(\d+)/);
   if (m) return parseInt(m[1], 10);
-  // From config target (stored from original URL)
-  if (myTarget?.experienceId) return myTarget.experienceId;
   // From page content
   const scripts = document.querySelectorAll("script");
   for (const s of scripts) {
@@ -537,7 +539,7 @@ function displayTimeToParam24(time) {
 }
 
 async function snipeApi(config) {
-  const experienceId = extractExperienceId();
+  const experienceId = extractExperienceId(config);
   if (!experienceId) {
     log("❌ API: Can't find experience ID", "error");
     return false;

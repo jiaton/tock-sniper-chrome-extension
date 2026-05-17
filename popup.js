@@ -51,6 +51,14 @@ chrome.storage.local.get(["config", "sniping", "status"], (d) => {
     $("#snipeMode").value = d.config.snipeMode || "api";
     $("#experienceId").value = d.config.experienceId || "";
     (d.config.dates || []).forEach((dt) => addSlotUI(dt));
+    // Auto-parse experience ID from URL if not already saved
+    if (!d.config.experienceId && d.config.url) {
+      const expMatch = d.config.url.match(/\/experience\/(\d+)/);
+      if (expMatch) {
+        $("#experienceId").value = expMatch[1];
+        saveConfig();
+      }
+    }
   } else {
     $("#releaseTime").value = defaultReleaseTime();
   }
@@ -196,6 +204,7 @@ $("#addSlot").addEventListener("click", () => {
 
 $("#url").addEventListener("change", () => { syncFieldsFromUrl(); saveConfig(); });
 $("#url").addEventListener("blur", () => { syncFieldsFromUrl(); saveConfig(); });
+$("#url").addEventListener("input", () => { syncFieldsFromUrl(); saveConfig(); });
 $("#prefTimes").addEventListener("input", () => { updateButton(); saveConfig(); });
 $("#partySize").addEventListener("input", saveConfig);
 $("#releaseTime").addEventListener("input", saveConfig);

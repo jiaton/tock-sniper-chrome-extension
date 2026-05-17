@@ -47,6 +47,7 @@ chrome.storage.local.get(["config", "sniping", "status"], (d) => {
     $("#partySize").value = d.config.partySize || 2;
     $("#releaseTime").value = d.config.releaseTime || defaultReleaseTime();
     $("#prefTimes").value = (d.config.prefTimes || []).join(", ");
+    $("#snipeMode").value = d.config.snipeMode || "api";
     (d.config.dates || []).forEach((dt) => addSlotUI(dt));
   } else {
     $("#releaseTime").value = defaultReleaseTime();
@@ -118,6 +119,10 @@ function paramTimeToDisplay(time) {
 
 function buildTargetUrl(baseUrl, date, partySize, targetTime) {
   const url = new URL(baseUrl);
+  // Ensure path ends with /search so Tock auto-opens the booking dialog
+  const path = url.pathname.replace(/\/search\/?$/, "").replace(/\/$/, "");
+  url.pathname = path + "/search";
+  url.search = "";
   url.searchParams.set("date", date);
   url.searchParams.set("size", String(partySize));
   const timeParam = displayTimeToParam(targetTime || "");
@@ -134,6 +139,10 @@ function buildTargets(config) {
   const dates = config.dates.length ? config.dates : [urlDate].filter(Boolean);
   const times = config.prefTimes.length ? config.prefTimes : [urlTime].filter(Boolean);
 
+  // Extract experience ID from original URL
+  const expMatch = base.pathname.match(/\/experience\/(\d+)/);
+  const experienceId = expMatch ? parseInt(expMatch[1], 10) : null;
+
   return dates.flatMap((date) => {
     const dateTimes = times.length ? times : [""];
     return dateTimes.map((time) => {
@@ -141,6 +150,7 @@ function buildTargets(config) {
       return {
         date,
         time: normalizedTime,
+        experienceId,
         url: buildTargetUrl(config.url, date, config.partySize, normalizedTime),
       };
     });
@@ -192,6 +202,7 @@ $("#startBtn").addEventListener("click", async () => {
     partySize: parseInt($("#partySize").value) || 2,
     releaseTime: $("#releaseTime").value,
     prefTimes: parseCsv($("#prefTimes").value),
+    snipeMode: $("#snipeMode").value,
     dates,
   };
 

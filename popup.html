@@ -47,6 +47,14 @@
   <input id="prefTimes" placeholder="e.g. 5:00 PM, 8:00 PM" />
   <small>Opens one tab for every date/time pair.</small>
 
+  <label>Snipe Mode</label>
+  <select id="snipeMode" style="width:100%;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;margin-top:2px;">
+    <option value="api">⚡ API Direct (fastest — locks slot via HTTP)</option>
+    <option value="dom">🖱️ DOM Click (fallback — clicks through UI)</option>
+    <option value="both">🔥 Both (API first, DOM fallback)</option>
+  </select>
+  <small>API mode sends the lock request instantly at release time.</small>
+
   <div id="slots"></div>
   <button class="add-btn" id="addSlot">+ Add Date</button>
 

@@ -36,7 +36,7 @@ function createOverlay() {
       #tock-sniper-overlay .ts-header span { opacity: 0.65; font-size: 11px; text-align: right; }
       #tock-sniper-overlay .ts-clock {
         padding: 6px 12px; background: #101629; color: #b5d4ff; font-variant-numeric: tabular-nums;
-        display: grid; grid-template-columns: 1fr 1fr 0.8fr; gap: 6px; font-size: 11px;
+        display: grid; grid-template-columns: 1fr 1fr 1.2fr; gap: 6px; font-size: 11px;
       }
       #tock-sniper-overlay .ts-clock strong { color: #fff; font-weight: 700; display: block; }
       #tock-sniper-overlay .ts-log {
@@ -122,7 +122,12 @@ function updateClock(releaseMs = 0) {
   const offsetEl = document.getElementById("ts-offset");
   if (nowEl) nowEl.textContent = formatClock(nowMs());
   if (countdownEl) countdownEl.textContent = releaseMs ? formatCountdown(releaseMs - nowMs()) : "--:--.---";
-  if (offsetEl) offsetEl.textContent = `${Math.round(clockOffsetMs)}ms`;
+  if (offsetEl) {
+    const abs = Math.abs(Math.round(clockOffsetMs));
+    if (abs < 5) offsetEl.textContent = "±0ms ✓";
+    else if (clockOffsetMs > 0) offsetEl.textContent = `+${abs}ms (you're ${abs}ms behind)`;
+    else offsetEl.textContent = `-${abs}ms (you're ${abs}ms ahead)`;
+  }
 }
 
 async function syncServerClock(reason = "sync") {
@@ -130,6 +135,11 @@ async function syncServerClock(reason = "sync") {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), CLOCK_SYNC_TIMEOUT_MS);
   try {
+    // Use Tock's own API endpoint for accurate backend time measurement.
+    // The Date header from Cloudflare can differ from Tock's backend clock.
+    // A lightweight HEAD to the page still goes through Cloudflare → Tock,
+    // and the Date header reflects when Cloudflare received the response.
+    // This is the closest we can get without parsing proto timestamps.
     const res = await fetch(location.href, {
       method: "HEAD",
       cache: "no-store",
@@ -140,12 +150,14 @@ async function syncServerClock(reason = "sync") {
     if (!serverDate) throw new Error("missing Date header");
 
     const finishedAt = Date.now();
-    const midpoint = startedAt + (finishedAt - startedAt) / 2;
+    const rttMs = finishedAt - startedAt;
+    // NTP-style: server stamped the response midway through the round trip
+    const midpoint = startedAt + rttMs / 2;
     clockOffsetMs = new Date(serverDate).getTime() - midpoint;
     const sync = {
       offsetMs: clockOffsetMs,
       sampledAt: finishedAt,
-      rttMs: finishedAt - startedAt,
+      rttMs,
     };
     const { best, replaced } = await saveBestClockSync(sync);
     const suffix = replaced ? "" : `; kept best RTT ${best.rttMs}ms`;
@@ -354,55 +366,290 @@ async function run() {
     return;
   }
 
-  setStatus(`⏰ Reload at ${releaseStr}`, "waiting");
-  log(`Waiting ${formatCountdown(delay)} — reload ${RELOAD_LEAD_MS}ms before release`);
+  const mode = config.snipeMode || "api";
+  const needsReload = mode === "dom";
 
-  const countdownInterval = setInterval(() => {
-    const remaining = releaseMs - RELOAD_LEAD_MS - nowMs();
-    if (remaining <= 0) { clearInterval(countdownInterval); return; }
-    setStatus(`⏰ Reload in ${formatCountdown(remaining)}`, "waiting");
-  }, 50);
+  if (needsReload) {
+    setStatus(`⏰ Reload at ${releaseStr}`, "waiting");
+    log(`Waiting ${formatCountdown(delay)} — reload ${RELOAD_LEAD_MS}ms before release`);
 
-  setTimeout(() => {
-    clearInterval(countdownInterval);
-    clearInterval(clockInterval);
-    stopClockCalibration();
-    setStatus("🔄 RELOADING!", "running");
-    log("⚡ Reloading NOW!");
-    location.reload();
-  }, Math.max(0, delay));
+    const countdownInterval = setInterval(() => {
+      const remaining = releaseMs - RELOAD_LEAD_MS - nowMs();
+      if (remaining <= 0) { clearInterval(countdownInterval); return; }
+      setStatus(`⏰ Reload in ${formatCountdown(remaining)}`, "waiting");
+    }, 50);
+
+    setTimeout(() => {
+      clearInterval(countdownInterval);
+      clearInterval(clockInterval);
+      stopClockCalibration();
+      setStatus("🔄 RELOADING!", "running");
+      log("⚡ Reloading NOW!");
+      location.reload();
+    }, Math.max(0, delay));
+  } else {
+    // API/both mode: fire directly at release time, no reload needed
+    // Start 500ms early to cover clock sync uncertainty (Date header has 1s resolution)
+    const API_EARLY_MS = 500;
+    const fireDelay = Math.max(0, releaseMs - API_EARLY_MS - nowMs());
+    setStatus(`⏰ API fires at ${releaseStr}`, "waiting");
+    log(`Waiting ${formatCountdown(fireDelay)} — API fires ~500ms before release (covers clock drift)`);
+
+    const countdownInterval = setInterval(() => {
+      const remaining = releaseMs - nowMs();
+      if (remaining <= 0) { clearInterval(countdownInterval); return; }
+      setStatus(`⏰ API in ${formatCountdown(remaining)}`, "waiting");
+    }, 50);
+
+    setTimeout(async () => {
+      clearInterval(countdownInterval);
+      clearInterval(clockInterval);
+      stopClockCalibration();
+      setStatus("🎯 Sniping NOW!", "running");
+      log("GO — sniping immediately!");
+      await snipe(config);
+    }, fireDelay);
+  }
 }
 
 async function snipe(config) {
-  // Step 1: Find "Book now" — retry up to 15s
-  let bookLink = null;
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
-    bookLink = [...document.querySelectorAll("a")].find(
-      (a) => a.textContent.trim() === "Book now"
-    );
-    if (bookLink) break;
-    await sleep(200);
+  const mode = config.snipeMode || "api";
+  if (mode === "api" || mode === "both") {
+    const success = await snipeApi(config);
+    if (success) return;
+    if (mode === "api") {
+      setStatus("⚠️ API failed — check manually", "error");
+      return;
+    }
+    log("API snipe failed, falling back to DOM...", "error");
   }
-  if (!bookLink) {
-    setStatus("❌ No slots found", "error");
-    log("No 'Book now' link after 15s", "error");
-    return;
-  }
-  log("🎉 Clicking Book now...");
-  bookLink.click();
+  await snipeDom(config);
+}
 
-  // Step 2: Wait for dialog
+// ─── API Direct Snipe ───────────────────────────────────────────────────────
+
+function extractTockMeta() {
+  // Extract x-tock-scope from page's meta/scripts or cookies
+  const scripts = document.querySelectorAll("script");
+  let businessId = null, businessGroupId = null;
+  for (const s of scripts) {
+    const text = s.textContent;
+    const bm = text.match(/"businessId"\s*:\s*(\d+)/);
+    const gm = text.match(/"businessGroupId"\s*:\s*"?(\d+)"?/);
+    if (bm) businessId = bm[1];
+    if (gm) businessGroupId = gm[1];
+    if (businessId && businessGroupId) break;
+  }
+  // Fallback: parse from existing fetch headers via performance entries
+  if (!businessId) {
+    const meta = document.querySelector('meta[name="tock:business_id"]');
+    if (meta) businessId = meta.content;
+  }
+  return { businessId, businessGroupId };
+}
+
+function getTockHeaders(config) {
+  const meta = extractTockMeta();
+  const scope = JSON.stringify({
+    businessId: meta.businessId || "",
+    businessGroupId: meta.businessGroupId || "",
+    site: "EXPLORETOCK",
+  });
+  // Session from cookie
+  const sessionMatch = document.cookie.match(/JSESSIONID=([^;]+)/);
+  const session = sessionMatch ? sessionMatch[1] : "";
+  // x-tock-session from page state (stored by Tock's JS)
+  const tockSession = sessionStorage.getItem("tock-session") ||
+    document.cookie.split(";").map(c => c.trim()).find(c => c.startsWith("tock_session="))?.split("=")[1] || "";
+
+  return {
+    "accept": "application/octet-stream",
+    "content-type": "application/octet-stream",
+    "x-tock-stream-format": "proto2",
+    "x-tock-scope": scope,
+    "x-tock-path": new URL(location.href).pathname,
+    "x-tock-build-number": "2026-05-08RC12-00",
+  };
+}
+
+function encodeVarint(value) {
+  const bytes = [];
+  while (value > 0x7f) {
+    bytes.push((value & 0x7f) | 0x80);
+    value >>>= 7;
+  }
+  bytes.push(value & 0x7f);
+  return bytes;
+}
+
+function encodeLengthDelimited(fieldNum, data) {
+  const tag = encodeVarint((fieldNum << 3) | 2);
+  const len = encodeVarint(data.length);
+  return [...tag, ...len, ...data];
+}
+
+function encodeVarintField(fieldNum, value) {
+  const tag = encodeVarint((fieldNum << 3) | 0);
+  const val = encodeVarint(value);
+  return [...tag, ...val];
+}
+
+function encodeStringField(fieldNum, str) {
+  const encoded = new TextEncoder().encode(str);
+  return encodeLengthDelimited(fieldNum, [...encoded]);
+}
+
+function buildLockRequest(partySize, datetime, experienceId) {
+  // PUT /api/ticket/group/lock
+  // Wrapper: field 60051, wire type 2 (length-delimited)
+  // Inner: f1=partySize, f2=datetime, f3=experienceId, f6=0
+  const inner = [
+    ...encodeVarintField(1, partySize),
+    ...encodeStringField(2, datetime),
+    ...encodeVarintField(3, experienceId),
+    ...encodeVarintField(6, 0),
+  ];
+  return new Uint8Array(encodeLengthDelimited(60051, inner));
+}
+
+function extractExperienceId() {
+  // From URL path: /experience/296772/...
+  const m = location.pathname.match(/\/experience\/(\d+)/);
+  if (m) return parseInt(m[1], 10);
+  // From config target (stored from original URL)
+  if (myTarget?.experienceId) return myTarget.experienceId;
+  // From page content
+  const scripts = document.querySelectorAll("script");
+  for (const s of scripts) {
+    const em = s.textContent.match(/"experienceId"\s*:\s*(\d+)/);
+    if (em) return parseInt(em[1], 10);
+  }
+  return null;
+}
+
+function displayTimeToParam24(time) {
+  const trimmed = time.trim();
+  const m24 = trimmed.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (m24) return `${m24[1].padStart(2, "0")}:${m24[2]}`;
+  const m12 = trimmed.match(/^(\d{1,2})(?::([0-5]\d))?\s*([AP])\.?M\.?$/i);
+  if (!m12) return "";
+  let hour = parseInt(m12[1], 10);
+  const minute = m12[2] || "00";
+  const mer = m12[3].toUpperCase();
+  if (mer === "A" && hour === 12) hour = 0;
+  if (mer === "P" && hour !== 12) hour += 12;
+  return `${String(hour).padStart(2, "0")}:${minute}`;
+}
+
+async function snipeApi(config) {
+  const experienceId = extractExperienceId();
+  if (!experienceId) {
+    log("❌ API: Can't find experience ID", "error");
+    return false;
+  }
+
+  const partySize = config.partySize || 2;
+  const timeParam = myTarget.timeParam || displayTimeToParam24(myTarget.time || "");
+  if (!timeParam) {
+    log("❌ API: No target time", "error");
+    return false;
+  }
+  const datetime = `${myDate}T${timeParam}`;
+  const headers = getTockHeaders(config);
+  const body = buildLockRequest(partySize, datetime, experienceId);
+
+  log(`🚀 API lock: ${datetime}, ${partySize} guests, exp ${experienceId}`);
+  log(`📦 Lock request: ${body.length} bytes`);
+
+  // Fire multiple attempts: covers clock uncertainty between local and server time.
+  // Keep low — multiple tabs fire in parallel (e.g. 4 tabs × 5 = 20 total requests).
+  const MAX_ATTEMPTS = 5;
+  const RETRY_INTERVAL_MS = 250;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch("/api/ticket/group/lock", {
+        method: "PUT",
+        headers,
+        body,
+        credentials: "include",
+      });
+
+      if (res.ok) {
+        const resData = new Uint8Array(await res.arrayBuffer());
+        log(`✅ API lock success! Attempt ${attempt}, ${resData.length}B`, "success");
+        setStatus("🛒 Slot locked! Loading checkout...", "success");
+        const bizSlug = location.pathname.split("/")[1];
+        location.href = `/${bizSlug}/checkout/confirm-purchase`;
+        await sleep(5000);
+        return true;
+      }
+
+      const status = res.status;
+      const text = await res.text().catch(() => "");
+      // 409/423 = slot not yet available or conflict — worth retrying
+      // 400 = bad request — probably won't change, but retry a few times
+      // 429 = rate limited — stop
+      if (status === 429) {
+        log(`⚠️ Rate limited on attempt ${attempt}, stopping`, "error");
+        break;
+      }
+      log(`⏳ Attempt ${attempt}/${MAX_ATTEMPTS}: ${status} — retrying...`);
+    } catch (err) {
+      log(`⏳ Attempt ${attempt}/${MAX_ATTEMPTS}: ${err.message} — retrying...`);
+    }
+
+    if (attempt < MAX_ATTEMPTS) await sleep(RETRY_INTERVAL_MS);
+  }
+
+  log("❌ API lock failed after all attempts", "error");
+  return false;
+}
+
+// ─── DOM Click Snipe (original method) ──────────────────────────────────────
+
+async function snipeDom(config) {
+  // Step 1: Wait for dialog — if URL has date/time params, Tock auto-opens it
+  // Only click "Book now" as fallback if dialog doesn't appear
   let dialog = null;
-  const dlgDeadline = Date.now() + 5000;
+  const dlgDeadline = Date.now() + (myTarget.hasUrlDate ? 3000 : 1000);
   while (Date.now() < dlgDeadline) {
     dialog = document.querySelector('[role="dialog"]');
     if (dialog) break;
-    await sleep(100);
+    await sleep(50);
   }
-  if (!dialog) { setStatus("❌ Dialog failed", "error"); log("Dialog didn't open", "error"); return; }
-  log("📋 Dialog opened");
-  await sleep(myTarget.hasUrlDate ? 100 : 500);
+
+  if (!dialog) {
+    // Fallback: click "Book now" manually
+    let bookLink = null;
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      bookLink = [...document.querySelectorAll("a")].find(
+        (a) => a.textContent.trim() === "Book now"
+      );
+      if (bookLink) break;
+      await sleep(50);
+    }
+    if (!bookLink) {
+      setStatus("❌ No slots found", "error");
+      log("No 'Book now' link after 15s", "error");
+      return;
+    }
+    log("🎉 Clicking Book now...");
+    bookLink.click();
+
+    const dlgDeadline2 = Date.now() + 5000;
+    while (Date.now() < dlgDeadline2) {
+      dialog = document.querySelector('[role="dialog"]');
+      if (dialog) break;
+      await sleep(50);
+    }
+    if (!dialog) { setStatus("❌ Dialog failed", "error"); log("Dialog didn't open", "error"); return; }
+    log("📋 Dialog opened");
+    await sleep(myTarget.hasUrlDate ? 100 : 500);
+  } else {
+    log("📋 Dialog auto-opened from URL");
+  }
 
   // Step 3: Select date — retry up to 10s, navigate months if needed
   if (myTarget.hasUrlDate) {

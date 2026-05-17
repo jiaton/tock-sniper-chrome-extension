@@ -36,7 +36,7 @@ function createOverlay() {
       #tock-sniper-overlay .ts-header span { opacity: 0.65; font-size: 11px; text-align: right; }
       #tock-sniper-overlay .ts-clock {
         padding: 6px 12px; background: #101629; color: #b5d4ff; font-variant-numeric: tabular-nums;
-        display: grid; grid-template-columns: 1fr 1fr 1.2fr; gap: 6px; font-size: 11px;
+        display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; font-size: 11px;
       }
       #tock-sniper-overlay .ts-clock strong { color: #fff; font-weight: 700; display: block; }
       #tock-sniper-overlay .ts-log {
@@ -57,9 +57,9 @@ function createOverlay() {
     </style>
     <div class="ts-header">🎯 Tock Sniper <span id="ts-date"></span></div>
     <div class="ts-clock">
-      <div>Current<strong id="ts-now">--:--:--.---</strong></div>
+      <div>Local<strong id="ts-local">--:--:--.---</strong></div>
+      <div>Server (est.)<strong id="ts-now">--:--:--.---</strong></div>
       <div>Countdown<strong id="ts-countdown">--:--.---</strong></div>
-      <div>Offset<strong id="ts-offset">--ms</strong></div>
     </div>
     <div class="ts-status waiting" id="ts-status">Initializing...</div>
     <div class="ts-log" id="ts-log"></div>
@@ -117,17 +117,12 @@ function formatCountdown(ms) {
 }
 
 function updateClock(releaseMs = 0) {
+  const localEl = document.getElementById("ts-local");
   const nowEl = document.getElementById("ts-now");
   const countdownEl = document.getElementById("ts-countdown");
-  const offsetEl = document.getElementById("ts-offset");
+  if (localEl) localEl.textContent = formatClock(Date.now());
   if (nowEl) nowEl.textContent = formatClock(nowMs());
   if (countdownEl) countdownEl.textContent = releaseMs ? formatCountdown(releaseMs - nowMs()) : "--:--.---";
-  if (offsetEl) {
-    const abs = Math.abs(Math.round(clockOffsetMs));
-    if (abs < 5) offsetEl.textContent = "±0ms ✓";
-    else if (clockOffsetMs > 0) offsetEl.textContent = `+${abs}ms (you're ${abs}ms behind)`;
-    else offsetEl.textContent = `-${abs}ms (you're ${abs}ms ahead)`;
-  }
 }
 
 async function syncServerClock(reason = "sync") {

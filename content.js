@@ -325,6 +325,14 @@ async function run() {
     document.title = `✅ ${targetLabel(myTarget)} — CHECKOUT`;
     setStatus("🛒 CHECKOUT — Complete payment!", "success");
     log("Already on checkout!", "success");
+    // Verify there's actually a booking — check for error states after page settles
+    setTimeout(() => {
+      const body = document.body?.textContent || "";
+      if (body.includes("no longer available") || body.includes("session has expired") || body.includes("unable to")) {
+        setStatus("⚠️ Checkout page but no valid booking", "error");
+        log("⚠️ Page says slot unavailable or session expired", "error");
+      }
+    }, 2000);
     return;
   }
 
@@ -583,7 +591,7 @@ async function snipeApi(config) {
         log(`⚠️ Rate limited on attempt ${attempt}, stopping`, "error");
         break;
       }
-      log(`⏳ Attempt ${attempt}/${MAX_ATTEMPTS}: ${status} — retrying...`);
+      log(`⏳ Attempt ${attempt}/${MAX_ATTEMPTS}: HTTP ${status} ${text.slice(0, 80)} — retrying...`);
     } catch (err) {
       log(`⏳ Attempt ${attempt}/${MAX_ATTEMPTS}: ${err.message} — retrying...`);
     }

@@ -494,6 +494,59 @@ function encodeStringField(fieldNum, str) {
   return encodeLengthDelimited(fieldNum, [...encoded]);
 }
 
+function decodeVarintFrom(data, pos) {
+  let result = 0, shift = 0;
+  while (pos < data.length) {
+    const b = data[pos++];
+    result |= (b & 0x7f) << shift;
+    shift += 7;
+    if (!(b & 0x80)) break;
+  }
+  return [result, pos];
+}
+
+function decodeProtoStrings(data) {
+  // Extract all readable strings from a proto2 binary response
+  const strings = [];
+  let pos = 0;
+  while (pos < data.length) {
+    let tag;
+    [tag, pos] = decodeVarintFrom(data, pos);
+    const wireType = tag & 0x7;
+    if (wireType === 0) {
+      [, pos] = decodeVarintFrom(data, pos);
+    } else if (wireType === 2) {
+      let len;
+      [len, pos] = decodeVarintFrom(data, pos);
+      if (pos + len > data.length) break;
+      const chunk = data.slice(pos, pos + len);
+      pos += len;
+      try {
+        const s = new TextDecoder().decode(chunk);
+        if (/^[\x20-\x7e]{2,}$/.test(s)) { strings.push(s); continue; }
+      } catch {}
+      // Recurse into nested messages
+      strings.push(...decodeProtoStrings(chunk));
+    } else if (wireType === 5) { pos += 4; }
+    else if (wireType === 1) { pos += 8; }
+    else break;
+  }
+  return strings;
+}
+
+function summarizeLockResponse(data) {
+  const strings = decodeProtoStrings(data);
+  const parts = [];
+  const dt = strings.find(s => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s));
+  if (dt) parts.push(dt);
+  const name = strings.find(s => s.length > 3 && !/^\d{4}-/.test(s) && !/^[A-Z]{3}$/.test(s));
+  if (name) parts.push(name);
+  const error = strings.find(s => /error|unavailable|sold|full|invalid|not found/i.test(s));
+  if (error) parts.push(`⚠️ ${error}`);
+  if (!parts.length) return strings.slice(0, 3).join(", ") || `${data.length}B binary`;
+  return parts.join(" | ");
+}
+
 function buildLockRequest(partySize, datetime, experienceId) {
   // PUT /api/ticket/group/lock
   // Wrapper: field 60051, wire type 2 (length-delimited)
@@ -574,7 +627,8 @@ async function snipeApi(config) {
 
       if (res.ok) {
         const resData = new Uint8Array(await res.arrayBuffer());
-        log(`✅ API lock success! Attempt ${attempt}, ${resData.length}B`, "success");
+        const summary = summarizeLockResponse(resData);
+        log(`✅ API lock success! Attempt ${attempt}: ${summary}`, "success");
         setStatus("🛒 Slot locked! Loading checkout...", "success");
         const bizSlug = location.pathname.split("/")[1];
         location.href = `/${bizSlug}/checkout/confirm-purchase`;
@@ -583,15 +637,13 @@ async function snipeApi(config) {
       }
 
       const status = res.status;
-      const text = await res.text().catch(() => "");
-      // 409/423 = slot not yet available or conflict — worth retrying
-      // 400 = bad request — probably won't change, but retry a few times
-      // 429 = rate limited — stop
+      const resBody = new Uint8Array(await res.arrayBuffer().catch(() => new ArrayBuffer(0)));
+      const summary = resBody.length ? summarizeLockResponse(resBody) : "";
       if (status === 429) {
         log(`⚠️ Rate limited on attempt ${attempt}, stopping`, "error");
         break;
       }
-      log(`⏳ Attempt ${attempt}/${MAX_ATTEMPTS}: HTTP ${status} ${text.slice(0, 80)} — retrying...`);
+      log(`⏳ Attempt ${attempt}/${MAX_ATTEMPTS}: HTTP ${status} ${summary} — retrying...`);
     } catch (err) {
       log(`⏳ Attempt ${attempt}/${MAX_ATTEMPTS}: ${err.message} — retrying...`);
     }

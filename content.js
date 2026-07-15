@@ -6,17 +6,10 @@
 let myDate = null;
 let myTarget = null;
 let overlay = null;
-let clockOffsetMs = 0;
-let clockSyncedAtPerf = 0;
-let clockSyncedAtServerMs = 0;
 const RELOAD_LEAD_MS = 75;
-const CLOCK_SYNC_SKIP_WINDOW_MS = 5000;
-const CLOCK_SYNC_TTL_MS = 5 * 60 * 1000;
-const CLOCK_SYNC_KEY = "tockClockSync";
-const CLOCK_SYNC_INTERVAL_MS = 30000;
-const FINAL_CALIBRATION_AT_MS = 15000;
-const CLOCK_SYNC_TIMEOUT_MS = 1200;
-const FINAL_CALIBRATION_SAMPLES = 3;
+// API burst: start 100ms early, fire every 25ms, stop at release time
+const API_EARLY_MS = 100;
+const API_BURST_INTERVAL_MS = 25;
 
 function createOverlay() {
   overlay = document.createElement("div");
@@ -90,17 +83,7 @@ const log = (msg, type = "info") => {
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const nowMs = () => (
-  clockSyncedAtServerMs
-    ? clockSyncedAtServerMs + performance.now() - clockSyncedAtPerf
-    : Date.now() + clockOffsetMs
-);
-
-function setClockSync(sync) {
-  clockOffsetMs = sync.offsetMs;
-  clockSyncedAtPerf = performance.now();
-  clockSyncedAtServerMs = Date.now() + clockOffsetMs;
-}
+const nowMs = () => Date.now();
 
 function formatClock(ms) {
   const d = new Date(ms);
@@ -123,134 +106,6 @@ function updateClock(releaseMs = 0) {
   if (localEl) localEl.textContent = formatClock(Date.now());
   if (nowEl) nowEl.textContent = formatClock(nowMs());
   if (countdownEl) countdownEl.textContent = releaseMs ? formatCountdown(releaseMs - nowMs()) : "--:--.---";
-}
-
-async function syncServerClock(reason = "sync") {
-  const startedAt = Date.now();
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), CLOCK_SYNC_TIMEOUT_MS);
-  try {
-    // Use Tock's own API endpoint for accurate backend time measurement.
-    // The Date header from Cloudflare can differ from Tock's backend clock.
-    // A lightweight HEAD to the page still goes through Cloudflare → Tock,
-    // and the Date header reflects when Cloudflare received the response.
-    // This is the closest we can get without parsing proto timestamps.
-    const res = await fetch(location.href, {
-      method: "HEAD",
-      cache: "no-store",
-      credentials: "include",
-      signal: controller.signal,
-    });
-    const serverDate = res.headers.get("date");
-    if (!serverDate) throw new Error("missing Date header");
-
-    const finishedAt = Date.now();
-    const rttMs = finishedAt - startedAt;
-    // NTP-style: server stamped the response midway through the round trip
-    const midpoint = startedAt + rttMs / 2;
-    clockOffsetMs = new Date(serverDate).getTime() - midpoint;
-    const sync = {
-      offsetMs: clockOffsetMs,
-      sampledAt: finishedAt,
-      rttMs,
-    };
-    const { best, replaced } = await saveBestClockSync(sync);
-    const suffix = replaced ? "" : `; kept best RTT ${best.rttMs}ms`;
-    log(`Clock ${reason}: sample ${Math.round(sync.offsetMs)}ms, RTT ${sync.rttMs}ms${suffix}`);
-    return true;
-  } catch (err) {
-    if (err.name !== "AbortError") {
-      log(`Clock ${reason} unavailable; using best known clock (${err.message})`, "error");
-    }
-    return false;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-async function saveBestClockSync(sync) {
-  let current = await readCachedClockSync();
-  if (current && Date.now() - current.sampledAt > CLOCK_SYNC_TTL_MS) current = null;
-  const shouldReplace = !current || sync.rttMs <= (current.rttMs ?? Infinity);
-  const best = shouldReplace ? sync : current;
-  setClockSync(best);
-  sessionStorage.setItem(CLOCK_SYNC_KEY, JSON.stringify(best));
-  await chrome.storage.local.set({ [CLOCK_SYNC_KEY]: best });
-  return { best, replaced: shouldReplace };
-}
-
-async function readCachedClockSync() {
-  const rawSessionSync = sessionStorage.getItem(CLOCK_SYNC_KEY);
-  let sessionSync = null;
-  try {
-    sessionSync = rawSessionSync ? JSON.parse(rawSessionSync) : null;
-  } catch {
-    sessionStorage.removeItem(CLOCK_SYNC_KEY);
-  }
-  const { [CLOCK_SYNC_KEY]: storedSync } = await chrome.storage.local.get(CLOCK_SYNC_KEY);
-  return sessionSync || storedSync || null;
-}
-
-async function useCachedClockSync() {
-  const sync = await readCachedClockSync();
-
-  if (!sync || typeof sync.offsetMs !== "number") return false;
-  if (Date.now() - sync.sampledAt > CLOCK_SYNC_TTL_MS) return false;
-
-  setClockSync(sync);
-  sessionStorage.setItem(CLOCK_SYNC_KEY, JSON.stringify(sync));
-  log(`Clock sync cached: ${Math.round(clockOffsetMs)}ms vs local, RTT ${sync.rttMs ?? "?"}ms`);
-  return true;
-}
-
-async function prepareClock(releaseMs) {
-  if (await useCachedClockSync()) return;
-
-  const localRemaining = releaseMs ? releaseMs - Date.now() : Infinity;
-  if (releaseMs && localRemaining <= CLOCK_SYNC_SKIP_WINDOW_MS) {
-    log(`Skipping clock sync inside final ${CLOCK_SYNC_SKIP_WINDOW_MS}ms window`);
-    return;
-  }
-
-  await syncServerClock("initial");
-}
-
-function scheduleClockCalibration(releaseMs) {
-  if (!releaseMs) return () => {};
-
-  const timers = [];
-  const runIfSafe = (reason) => {
-    if (releaseMs - nowMs() <= CLOCK_SYNC_SKIP_WINDOW_MS) return;
-    syncServerClock(reason);
-  };
-
-  const intervalId = setInterval(() => runIfSafe("refresh"), CLOCK_SYNC_INTERVAL_MS);
-  timers.push(() => clearInterval(intervalId));
-
-  const finalDelay = releaseMs - FINAL_CALIBRATION_AT_MS - nowMs();
-  if (finalDelay > 0) {
-    const finalTimer = setTimeout(async () => {
-      log(`Final clock calibration: ${FINAL_CALIBRATION_SAMPLES} samples`);
-      for (let i = 0; i < FINAL_CALIBRATION_SAMPLES; i++) {
-        if (releaseMs - nowMs() <= CLOCK_SYNC_SKIP_WINDOW_MS) break;
-        await syncServerClock(`final ${i + 1}/${FINAL_CALIBRATION_SAMPLES}`);
-        await sleep(150);
-      }
-      log("Clock calibration frozen for final window");
-    }, finalDelay);
-    timers.push(() => clearTimeout(finalTimer));
-  }
-
-  const freezeDelay = releaseMs - CLOCK_SYNC_SKIP_WINDOW_MS - nowMs();
-  if (freezeDelay > 0) {
-    const freezeTimer = setTimeout(() => {
-      timers.forEach((clear) => clear());
-      log("Clock calibration frozen");
-    }, freezeDelay);
-    timers.push(() => clearTimeout(freezeTimer));
-  }
-
-  return () => timers.forEach((clear) => clear());
 }
 
 function targetFromUrl() {
@@ -319,7 +174,6 @@ async function run() {
   document.getElementById("ts-date").textContent = `${targetLabel(myTarget)} [${modeLabel}]`;
   document.title = `🎯 ${targetLabel(myTarget)} ${modeLabel} | ${document.title}`;
   const releaseMs = config.releaseTime ? new Date(config.releaseTime).getTime() : 0;
-  await prepareClock(releaseMs);
 
   if (location.href.includes("/checkout/")) {
     document.title = `✅ ${targetLabel(myTarget)} — CHECKOUT`;
@@ -359,15 +213,13 @@ async function run() {
     return;
   }
 
-  // FUTURE release time → countdown then reload
-  const stopClockCalibration = scheduleClockCalibration(releaseMs);
+  // FUTURE release time → countdown then fire
   const delay = releaseMs - RELOAD_LEAD_MS - nowMs();
   const releaseStr = new Date(config.releaseTime).toLocaleTimeString();
   if (delay <= 0) {
-    stopClockCalibration();
     const waitMs = Math.max(0, releaseMs - nowMs());
     setStatus(`⏰ Release in ${formatCountdown(waitMs)}`, "waiting");
-    log(`Inside reload lead window; waiting ${formatCountdown(waitMs)} to snipe`);
+    log(`Inside lead window; waiting ${formatCountdown(waitMs)} to snipe`);
     setTimeout(async () => {
       setStatus("🎯 Sniping NOW!", "running");
       log("GO — sniping immediately!");
@@ -392,18 +244,15 @@ async function run() {
     setTimeout(() => {
       clearInterval(countdownInterval);
       clearInterval(clockInterval);
-      stopClockCalibration();
       setStatus("🔄 RELOADING!", "running");
       log("⚡ Reloading NOW!");
       location.reload();
     }, Math.max(0, delay));
   } else {
-    // API/both mode: fire directly at release time, no reload needed
-    // Start 500ms early to cover clock sync uncertainty (Date header has 1s resolution)
-    const API_EARLY_MS = 500;
+    // API mode: burst every 25ms starting 100ms before release, stop at release time
     const fireDelay = Math.max(0, releaseMs - API_EARLY_MS - nowMs());
     setStatus(`⏰ API fires at ${releaseStr}`, "waiting");
-    log(`Waiting ${formatCountdown(fireDelay)} — API fires ~500ms before release (covers clock drift)`);
+    log(`Waiting ${formatCountdown(fireDelay)} — API burst starts ${API_EARLY_MS}ms before release`);
 
     const countdownInterval = setInterval(() => {
       const remaining = releaseMs - nowMs();
@@ -414,9 +263,8 @@ async function run() {
     setTimeout(async () => {
       clearInterval(countdownInterval);
       clearInterval(clockInterval);
-      stopClockCalibration();
       setStatus("🎯 Sniping NOW!", "running");
-      log("GO — sniping immediately!");
+      log("GO — sniping!");
       await snipe(config);
     }, fireDelay);
   }
@@ -622,12 +470,13 @@ async function snipeApi(config) {
   log(`🚀 API lock: ${datetime}, ${partySize} guests, exp ${experienceId}`);
   log(`📦 Lock request: ${body.length} bytes`);
 
-  // Fire multiple attempts: covers clock uncertainty between local and server time.
-  // Keep low — multiple tabs fire in parallel (e.g. 4 tabs × 5 = 20 total requests).
-  const MAX_ATTEMPTS = 5;
-  const RETRY_INTERVAL_MS = 250;
+  // Burst: fire every 25ms starting 100ms before release, stop once release time passes.
+  // Mac local clock (NTP) is accurate to ~10-50ms — no server clock sync needed.
+  const releaseMs = config.releaseTime ? new Date(config.releaseTime).getTime() : Date.now();
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  let attempt = 0;
+  while (Date.now() <= releaseMs) {
+    attempt++;
     try {
       const res = await fetch("/api/ticket/group/lock", {
         method: "PUT",
@@ -641,7 +490,6 @@ async function snipeApi(config) {
         const summary = summarizeLockResponse(resData);
         log(`✅ API lock success! Attempt ${attempt}: ${summary}`, "success");
         setStatus("🛒 Slot locked! Loading checkout...", "success");
-        // Persist result for checkout page
         sessionStorage.setItem("tockLockResult", JSON.stringify({ ok: true, attempt, summary }));
         const bizSlug = location.pathname.split("/")[1];
         location.href = `/${bizSlug}/checkout/confirm-purchase`;
@@ -656,12 +504,12 @@ async function snipeApi(config) {
         log(`⚠️ Rate limited on attempt ${attempt}, stopping`, "error");
         break;
       }
-      log(`⏳ Attempt ${attempt}/${MAX_ATTEMPTS}: HTTP ${status} ${summary} — retrying...`);
+      log(`⏳ Attempt ${attempt}: HTTP ${status} ${summary}`);
     } catch (err) {
-      log(`⏳ Attempt ${attempt}/${MAX_ATTEMPTS}: ${err.message} — retrying...`);
+      log(`⏳ Attempt ${attempt}: ${err.message}`);
     }
 
-    if (attempt < MAX_ATTEMPTS) await sleep(RETRY_INTERVAL_MS);
+    await sleep(API_BURST_INTERVAL_MS);
   }
 
   log("❌ API lock failed after all attempts", "error");

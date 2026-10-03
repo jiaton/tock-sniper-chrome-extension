@@ -53,7 +53,7 @@
 <body>
 <div class="browser">
   <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
-    <div class="addr" id="addr">exploretock.com/saffron-and-salt</div><div id="extIcon">🎯</div></div>
+    <div class="addr" id="addr">exploretock.com/saffron-and-salt</div><div id="extIcon"><img src="../icons/icon16.png" width="16" height="16" alt=""></div></div>
   <div class="page" id="venue">
     <div class="hero"></div>
     <h2>Saffron &amp; Salt</h2><div class="meta">San Francisco, CA · Contemporary · $$$$</div>
@@ -108,7 +108,7 @@ async function setup() {
   pdoc.querySelector("#timeInput").value = "20:00";
 
   const src = await (await fetch("../content.js", { cache: "no-store" })).text();
-  const overlayCode = src.slice(src.indexOf("function createOverlay() {"), src.indexOf("function setStatus("));
+  const overlayCode = src.slice(src.indexOf("const BELL_ICON_SVG"), src.indexOf("function setStatus("));
   overlay = new Function("let overlay;" + overlayCode + "; createOverlay(); return overlay;")();
   overlay.style.cssText += ";left:600px;top:58px;right:auto;display:none;";
   const scheduleCode = src.slice(src.indexOf("const API_SCHEDULE"), src.indexOf("const API_MAX_429"));

@@ -1,4 +1,4 @@
-# Chrome Web Store listing — Tock Sniper v3.0.1
+# Chrome Web Store listing — Tock Sniper v3.1.0
 
 Copy-paste text for the developer dashboard. Keep it in sync with `manifest.json`.
 

@@ -1,4 +1,4 @@
-# 🎯 Tock Sniper
+# <img src="icons/icon128.png" width="40" height="40" align="top" alt=""> Tock Sniper
 
 Auto-grab reservations on [Tock](https://www.exploretock.com) the instant they drop.
 

@@ -38,6 +38,16 @@ const FALLBACK_BUILD_NUMBER = "servingstack-2026-09-30RC03-00";
 // offerings kept answering, so lock is only tried once the venue lists experiences.
 const MONITOR_429_BACKOFF_MS = 10 * 60 * 1000;
 
+// The 16-px service-bell icon (scripts/icon.mjs), inlined: an <img> of the extension's own PNG would
+// need web_accessible_resources, which would expose it to every site.
+const BELL_ICON_SVG = `<svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true">
+  <defs><linearGradient id="ts-bell-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffb547"/><stop offset="1" stop-color="#f2621f"/></linearGradient></defs>
+  <rect width="16" height="16" rx="3.5" fill="url(#ts-bell-bg)"/>
+  <rect x="7" y="2" width="2" height="2" rx=".6" fill="#fff"/>
+  <path d="M3 10 A5 5.5 0 0 1 13 10 Z" fill="#fff"/>
+  <rect x="2" y="11" width="12" height="2" rx="1" fill="#fff"/>
+</svg>`;
+
 function createOverlay() {
   overlay = document.createElement("div");
   overlay.id = "tock-sniper-overlay";
@@ -56,7 +66,9 @@ function createOverlay() {
       }
       #tock-sniper-overlay.ts-dragging { opacity: 0.92; }
       #tock-sniper-overlay.ts-dragging .ts-header { cursor: grabbing; }
-      #tock-sniper-overlay .ts-header span { opacity: 0.65; font-size: 11px; text-align: right; }
+      #tock-sniper-overlay .ts-title { display: flex; align-items: center; gap: 7px; }
+      #tock-sniper-overlay .ts-title svg { flex: none; }
+      #tock-sniper-overlay #ts-date { opacity: 0.65; font-size: 11px; text-align: right; }
       #tock-sniper-overlay .ts-clock {
         padding: 6px 12px; background: #101629; color: #b5d4ff; font-variant-numeric: tabular-nums;
         display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 11px;
@@ -78,7 +90,7 @@ function createOverlay() {
       #tock-sniper-overlay .ts-status.success { background: #2f9e44; }
       #tock-sniper-overlay .ts-status.error { background: #c92a2a; }
     </style>
-    <div class="ts-header" title="Drag to move · double-click to reset">🎯 Tock Sniper <span id="ts-date"></span></div>
+    <div class="ts-header" title="Drag to move · double-click to reset"><span class="ts-title">${BELL_ICON_SVG}Tock Sniper</span><span id="ts-date"></span></div>
     <div class="ts-clock">
       <div>Local<strong id="ts-local">--:--:--.---</strong></div>
       <div>Countdown<strong id="ts-countdown">--:--.---</strong></div>
@@ -287,7 +299,7 @@ async function run() {
   createOverlay();
   const modeLabel = myTarget.mode === "api" ? "⚡API" : "🖱️DOM";
   document.getElementById("ts-date").textContent = `${targetLabel(myTarget)} [${modeLabel}]`;
-  document.title = `🎯 ${targetLabel(myTarget)} ${modeLabel} | ${document.title}`;
+  document.title = `🛎️ ${targetLabel(myTarget)} ${modeLabel} | ${document.title}`;
   const releaseMs = config.releaseTime ? new Date(config.releaseTime).getTime() : 0;
 
   if (location.href.includes("/checkout/")) {

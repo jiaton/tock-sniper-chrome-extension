@@ -116,7 +116,7 @@ if (!s.dark) {
   stage.insertAdjacentHTML("beforeend", `
     <div class="browser">
       <div class="chrome-bar"><div class="dots"><i></i><i></i><i></i></div>
-        <div class="addr">exploretock.com/${RESTAURANT.slug}</div><div class="ext-icon ${s.ext ? "on" : ""}">🎯</div></div>
+        <div class="addr">exploretock.com/${RESTAURANT.slug}</div><div class="ext-icon ${s.ext ? "on" : ""}"><img src="../icons/icon16.png" width="16" height="16" alt=""></div></div>
       <div class="venue"><div class="hero-img"></div>
         <h2>${RESTAURANT.name}</h2><div class="meta">${RESTAURANT.city} · Contemporary · $$$$</div>
         <div class="notice">Reservations are unavailable.<br>${RELEASE.text}.</div>
@@ -166,7 +166,7 @@ async function renderPopup(opts) {
 // ── Real overlay markup from content.js ──
 async function renderOverlay(kind) {
   const src = await (await fetch("../content.js", { cache: "no-store" })).text();
-  const code = src.slice(src.indexOf("function createOverlay() {"), src.indexOf("function setStatus("));
+  const code = src.slice(src.indexOf("const BELL_ICON_SVG"), src.indexOf("function setStatus("));
   // createOverlay assigns the global `overlay`
   new Function("ctx", "let overlay;" + code + "; createOverlay(); return overlay;")();
   const el = document.getElementById("tock-sniper-overlay");

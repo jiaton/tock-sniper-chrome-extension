@@ -59,9 +59,9 @@ tock-sniper-ext/
 ├── popup.js               # Builds targets[], opens tabs with _tidx, auto-saves config
 ├── content.js             # Per-tab snipe logic (API direct or DOM click)
 ├── background.js          # Keepalive alarm, clears state on arm/disarm, sends Telegram notifications
-├── icons/                 # 16, 48, 128px icons
+├── icons/                 # 16, 48, 128px service-bell icons (generated — edit scripts/icon.mjs)
 ├── .github/workflows/     # CI: builds a fresh zip, tags + releases v<manifest version> on push to main
-├── scripts/               # generate-icons.js, store-screenshots.html (store images), demo.html + record-demo.mjs (docs/demo.gif)
+├── scripts/               # icon.mjs + render-icons.mjs (icons/), store-screenshots.html (store images), demo.html + record-demo.mjs (docs/demo.gif)
 ├── docs/demo.gif          # README demo (regenerate: node scripts/record-demo.mjs)
 ├── store/                 # listing.md (store text, permission justifications), screenshots
 ├── LICENSE                # MIT

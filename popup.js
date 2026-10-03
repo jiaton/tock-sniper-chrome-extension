@@ -14,9 +14,9 @@ const EXP_SOURCE_HINTS = {
 };
 
 const SNIPE_MODE_HINTS = {
-  api: "Sends the lock request directly at release time. No page reload.",
-  dom: "Reloads just before release and clicks through the booking dialog.",
-  both: "Opens an API tab and a DOM tab per date × time; they run independently.",
+  api: "One tab sends lock requests for every date × time at release, by priority. No page reload.",
+  dom: "One tab per date × time: reloads just before release and clicks through the booking dialog.",
+  both: "One API tab for all targets plus a DOM tab per date × time; they run independently.",
 };
 
 const radioValue = (name) => document.querySelector(`input[name="${name}"]:checked`)?.value;
@@ -68,10 +68,17 @@ function renderChips(container, items, label, onRemove, emptyText) {
     container.appendChild(empty);
     return;
   }
-  items.forEach((item) => {
+  items.forEach((item, i) => {
     const chip = document.createElement("span");
     chip.className = "chip";
-    chip.textContent = label(item);
+    // Order added = priority (API mode tries dates first, then times, in this order)
+    if (items.length > 1) {
+      const rank = document.createElement("span");
+      rank.className = "rank";
+      rank.textContent = `${i + 1}`;
+      chip.appendChild(rank);
+    }
+    chip.appendChild(document.createTextNode(label(item)));
     const remove = document.createElement("button");
     remove.type = "button";
     remove.title = "Remove";
@@ -96,7 +103,7 @@ function renderTargets() {
 
 function addDate(date) {
   if (!date || state.dates.includes(date)) return false;
-  state.dates = [...state.dates, date].sort();
+  state.dates = [...state.dates, date]; // order added = priority
   return true;
 }
 
@@ -104,7 +111,7 @@ function addTime(time) {
   const param = displayTimeToParam(time);
   const display = paramTimeToDisplay(param);
   if (!display || state.times.includes(display)) return false;
-  state.times = [...state.times, display].sort((a, b) => displayTimeToParam(a).localeCompare(displayTimeToParam(b)));
+  state.times = [...state.times, display]; // order added = priority
   return true;
 }
 
@@ -331,13 +338,16 @@ chrome.storage.onChanged.addListener((changes) => {
 function updateButton(armed = armedState) {
   armedState = armed;
   const btn = $("#startBtn");
-  const modeMultiplier = radioValue("snipeMode") === "both" ? 2 : 1;
-  const tabCount = Math.max(1, state.dates.length) * Math.max(1, state.times.length) * modeMultiplier;
+  const mode = radioValue("snipeMode");
+  const combos = Math.max(1, state.dates.length) * Math.max(1, state.times.length);
+  const domTabs = mode === "api" ? 0 : combos;
+  const tabCount = domTabs + (mode === "dom" ? 0 : 1);
   btn.textContent = armed ? "⏹ Disarm All" : "⚡ Arm Sniper";
   btn.className = armed ? "active" : "";
+  const parts = [mode !== "dom" && `1 API tab for ${combos} target${combos !== 1 ? "s" : ""}`, domTabs && `${domTabs} DOM tab${domTabs !== 1 ? "s" : ""}`].filter(Boolean);
   $("#tabSummary").textContent = armed
     ? "Sniping — tabs are counting down."
-    : `Opens ${tabCount} tab${tabCount !== 1 ? "s" : ""} (${state.dates.length || 1} date × ${state.times.length || 1} time${modeMultiplier > 1 ? " × 2 modes" : ""})`;
+    : `Opens ${tabCount} tab${tabCount !== 1 ? "s" : ""}: ${parts.join(" + ")}`;
 }
 
 function updateHints() {
@@ -616,11 +626,16 @@ $("#startBtn").addEventListener("click", async () => {
   }
 
   chrome.storage.local.set({ config, sniping: true });
-  showStatus(`Armed! Opening ${targets.length} tab${targets.length !== 1 ? "s" : ""}...`, "info");
-
-  for (let i = 0; i < targets.length; i++) {
-    const url = new URL(targets[i].url);
-    url.searchParams.set("_tidx", String(i));
+  // API: one tab (_tidx=api) handles every API target by priority, so more targets don't multiply the
+  // requests (Tock rate-limits per client). DOM: one tab per target (_tidx=<index>), it clicks the page.
+  const tabs = [];
+  const firstApi = targets.find((t) => t.mode === "api");
+  if (firstApi) tabs.push({ url: firstApi.url, tidx: "api" });
+  targets.forEach((t, i) => { if (t.mode === "dom") tabs.push({ url: t.url, tidx: String(i) }); });
+  showStatus(`Armed! Opening ${tabs.length} tab${tabs.length !== 1 ? "s" : ""}...`, "info");
+  for (const tab of tabs) {
+    const url = new URL(tab.url);
+    url.searchParams.set("_tidx", tab.tidx);
     chrome.tabs.create({ url: url.toString(), active: false });
   }
 });

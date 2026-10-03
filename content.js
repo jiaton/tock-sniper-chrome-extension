@@ -6,7 +6,7 @@
 let myDate = null;
 let myTarget = null;
 let overlay = null;
-// Result of the single-attempt pre-check ({ at, open: {"HH:MM": n}, rateLimited }), so the monitor that
+// Result of the single-attempt pre-check ({ at, slots, expId, rateLimited }), so the monitor that
 // follows doesn't repeat the same offerings + calendar requests straight away
 let lastPrecheck = null;
 // DOM mode reload lead. After a reload, Tock requests availability ~1.2–1.5s later (measured
@@ -193,7 +193,7 @@ function persistLog(msg, type) {
   try {
     chrome.runtime.sendMessage({
       type: "tockSniper:log",
-      entry: { t: Date.now(), venue: location.pathname.split("/")[1] || "", target: myTarget ? targetLabel(myTarget) : "", level: type, msg },
+      entry: { t: Date.now(), venue: location.pathname.split("/")[1] || "", target: myTarget ? tabLabel() : "", level: type, msg },
     }).catch(() => {});
   } catch {}
 }
@@ -298,7 +298,11 @@ async function run() {
     const targets = config.targets || config.dates.map((date) => ({ date, time: "", mode: "api" }));
     const url = new URL(location.href);
     const tidx = url.searchParams.get("_tidx");
-    if (tidx !== null) {
+    if (tidx === "api") {
+      // One tab for every API target (popup ≥ 3.2): myTarget is the top-priority one, `group` the count
+      const api = targets.filter((t) => (t.mode || "api") === "api");
+      myTarget = { ...(api[0] || targets[0]), mode: "api", group: api.length };
+    } else if (tidx !== null) {
       myTarget = targets[parseInt(tidx, 10)] || targets[0];
     } else {
       // Fallback: use URL date/time to find matching target
@@ -316,12 +320,14 @@ async function run() {
 
   createOverlay();
   const modeLabel = myTarget.mode === "api" ? "⚡API" : "🖱️DOM";
-  document.getElementById("ts-date").textContent = `${targetLabel(myTarget)} [${modeLabel}]`;
-  document.title = `🛎️ ${targetLabel(myTarget)} ${modeLabel} | ${document.title}`;
+  document.getElementById("ts-date").textContent = `${tabLabel()} [${modeLabel}]`;
+  document.title = `🛎️ ${tabLabel()} ${modeLabel} | ${document.title}`;
+  if (myTarget.group > 1) log(`🎯 ${myTarget.group} targets, by priority: ${apiTargets(config).map((t, i) => `${i + 1}. ${lockLabel(t)}`).join(", ")}`);
   const releaseMs = config.releaseTime ? new Date(config.releaseTime).getTime() : 0;
 
   if (location.href.includes("/checkout/")) {
-    document.title = `✅ ${targetLabel(myTarget)} — CHECKOUT`;
+    const locked = JSON.parse(sessionStorage.getItem("tockLockResult") || "{}");
+    document.title = `✅ ${locked.ok && locked.label ? locked.label : tabLabel()} — CHECKOUT`;
     setStatus("🛒 CHECKOUT — Complete payment!", "success");
     // Show API lock result from before navigation
     const lockResult = sessionStorage.getItem("tockLockResult");
@@ -434,10 +440,9 @@ async function snipe(config) {
 // ─── Notifications (Telegram via background.js) ────────────────────────────
 
 const restaurantName = () => (document.title || "").split(" - ")[0].replace(/^[^\w\p{L}]+\s*/u, "").trim() || location.pathname.split("/")[1];
-const bookingLabel = (config) => {
-  const when = config.timeParam ? `${myDate} ${timeParamToDisplay(config.timeParam)}` : targetLabel(myTarget);
-  return `${restaurantName()} · ${when} · ${config.partySize || 2} guests`;
-};
+const bookingLabel = (config, target) => `${restaurantName()} · ${target ? lockLabel(target) : targetLabel(myTarget)} · ${config.partySize || 2} guests`;
+// What this tab is after: "2026-10-10 8:00 PM", or "4 targets" for an API tab handling several
+const tabLabel = () => (myTarget?.group > 1 ? `${myTarget.group} targets` : targetLabel(myTarget));
 // All API targets of this run (restaurant-level messages are sent once, so they list every target)
 const allTargetsLabel = (config) => {
   const targets = (config.targets || []).filter((t) => (t.mode || "api") === "api").map(targetLabel);
@@ -466,32 +471,34 @@ async function monitorLoop(config, lastReason = "") {
   const headers = getTockHeaders();
   const partySize = config.partySize || 2;
   const manualId = config.expSource === "auto" ? null : extractExperienceId(config);
+  const targets = apiTargets(config).filter((t) => t.date && t.timeParam);
+  const dates = [...new Set(targets.map((t) => t.date))];
 
   log(`👀 Monitoring every ~${intervalMs / 1000}s until ${new Date(until).toLocaleTimeString()} — offerings only until an experience is listed`);
   notify(`👀 Tock Sniper is monitoring ${restaurantName()} for ${partySize} guests\nTargets: ${allTargetsLabel(config)}\nLast attempt: ${lastReason || "no slot"}`, "monitoring");
 
   const flexMinutes = Math.max(0, m.flexMinutes ?? MONITOR_DEFAULT_FLEX_MIN);
-  const targetTime = myTarget.timeParam || displayTimeToParam24(myTarget.time || "");
-  log(`👀 Target ${myDate} ${targetTime || "?"} for ${partySize}${flexMinutes ? ` — also takes the closest open time within ±${flexMinutes} min` : " — exact time only"}`);
+  log(`👀 ${targets.length > 1 ? `Targets by priority: ${targets.map((t, i) => `${i + 1}. ${lockLabel(t)}`).join(", ")}` : `Target ${lockLabel(targets[0] || { date: myDate, timeParam: "?" })}`} for ${partySize}${flexMinutes ? ` — exact times first, then the closest open time within ±${flexMinutes} min` : " — exact times only"}`);
 
-  // A listed experience is NOT availability: sold-out venues keep listing theirs. Seats come from
-  // the calendar; "seats" = some time on the target date has a table for the party.
-  let checks = 0;
-  let seatsNotified = false;
-  let listed = "";         // experiences last logged as listed
-  let warned = "";         // party-size warning last logged
-  let lastMsg = "";
-  let lastAvail = null;    // logged when the open times change
-  const note = (msg, type = "info") => { if (msg !== lastMsg) log(msg, type); lastMsg = msg; };
-
-  // The pre-check just read offerings + calendar: unless it saw a usable time nearby, wait one interval
+  // The pre-check just read offerings + calendar: unless it saw something bookable, wait one interval
   // (or the 429 back-off) before the first check instead of asking again right away.
-  if (lastPrecheck && Date.now() - lastPrecheck.at < 10000 && !pickTime(lastPrecheck.open, targetTime, flexMinutes)) {
+  if (lastPrecheck && Date.now() - lastPrecheck.at < 10000
+      && !chooseTarget(lastPrecheck.slots, targets, partySize, [lastPrecheck.expId], flexMinutes)) {
     const firstWait = lastPrecheck.rateLimited ? MONITOR_429_BACKOFF_MS : intervalMs * (0.8 + Math.random() * 0.4);
     setStatus(`👀 Monitoring — first check in ${Math.round(firstWait / 1000)}s`, lastPrecheck.rateLimited ? "error" : "waiting");
     await sleep(Math.min(firstWait, until - Date.now()));
   }
   lastPrecheck = null;
+
+  // A listed experience is NOT availability: sold-out venues keep listing theirs. Seats come from
+  // the calendar: a target has seats when its date has a table for the party at (or near) its time.
+  let checks = 0;
+  let seatsNotified = false;
+  let listed = "";         // experiences last logged as listed
+  let warned = "";         // party-size warning last logged
+  let lastMsg = "";
+  const lastAvail = {};    // per target date (+ "others"): logged when the open times change
+  const note = (msg, type = "info") => { if (msg !== lastMsg) log(msg, type); lastMsg = msg; };
 
   while (Date.now() < until) {
     if (!(await chrome.storage.local.get("sniping")).sniping) {
@@ -517,45 +524,53 @@ async function monitorLoop(config, lastReason = "") {
         if (sizeWarning && sizeWarning !== warned) log(sizeWarning, "error");
         warned = sizeWarning;
 
-        // Which times actually have a table for this party? (null: calendar unavailable → just try the target)
-        let openTimes = null;
+        // Which target (or nearby time) actually has a table? (calendar unreadable → try the top target)
+        let pick = null;
+        let calendarOk = false;
         try {
           const slots = await fetchCalendar(headers);
-          openTimes = openTimesFor(slots, partySize, myDate, [exp.id]);
-          const avail = formatOpenTimes(openTimes);
-          if (avail !== lastAvail) {
-            const others = Object.keys(openTimesFor(slots, partySize, null, [exp.id])).filter((k) => !k.startsWith(myDate));
-            const otherDates = [...new Set(others.map((k) => k.split(" ")[0]))];
-            const wasSeats = lastAvail && !lastAvail.startsWith("error:");
-            const sizes = tableSizes(slots, myDate, [exp.id]);
+          calendarOk = true;
+          for (const date of dates) {
+            const avail = formatOpenTimes(openTimesFor(slots, partySize, date, [exp.id]));
+            if (avail === lastAvail[date]) continue;
+            const hadSeats = lastAvail[date] && !lastAvail[date].startsWith("error:");
+            const sizes = tableSizes(slots, date, [exp.id]);
             log(avail
-              ? `🔓 Seats ${myDate}, ${partySize} guests: ${avail}`
-              : `${wasSeats ? "🈵 Seats gone" : "🈵 No seats"} — ${myDate}, ${partySize} guests${sizes ? ` (tables that day seat ${sizes})` : " (no tables that day)"}${otherDates.length ? ` · other dates with seats: ${otherDates.slice(0, 8).join(", ")}${otherDates.length > 8 ? "…" : ""}` : ""}`,
+              ? `🔓 Seats ${date}, ${partySize} guests: ${avail}`
+              : `${hadSeats ? "🈵 Seats gone" : "🈵 No seats"} — ${date}, ${partySize} guests${sizes ? ` (tables that day seat ${sizes})` : " (no tables that day)"}`,
             avail ? "success" : "info");
-            lastAvail = avail;
+            lastAvail[date] = avail;
           }
+          const otherDates = [...new Set(Object.keys(openTimesFor(slots, partySize, null, [exp.id])).map((k) => k.split(" ")[0]))]
+            .filter((d) => !dates.includes(d)).sort();
+          const others = otherDates.slice(0, 8).join(", ") + (otherDates.length > 8 ? "…" : "");
+          if (others !== (lastAvail.others ?? "")) log(others ? `📅 Other dates with seats for ${partySize}: ${others}` : "📅 No other dates with seats");
+          lastAvail.others = others;
+          pick = chooseTarget(slots, targets, partySize, [exp.id], flexMinutes);
         } catch (err) {
           if (err.status === 429) throw err;
-          const avail = `error: ${err.message}`;
-          if (avail !== lastAvail) log(`📅 Calendar unavailable (${err.message}) — trying the target time`, "error");
-          lastAvail = avail;
+          const msg = `error: ${err.message}`;
+          if (msg !== lastAvail.error) log(`📅 Calendar unavailable (${err.message}) — trying the top target`, "error");
+          lastAvail.error = msg;
+          if (targets[0]) pick = { date: targets[0].date, timeParam: targets[0].timeParam, target: targets[0] };
         }
 
-        const time = openTimes ? pickTime(openTimes, targetTime, flexMinutes) : targetTime;
-        if (openTimes && Object.keys(openTimes).length && !seatsNotified) {
+        if (pick && calendarOk && !seatsNotified) {
           seatsNotified = true;
-          notify(() => `🔓 Seats at ${restaurantName()} — ${myDate}, ${partySize} guests: ${formatOpenTimes(openTimes)}\nTrying to lock: ${allTargetsLabel(config)}…`, "opened");
+          notify(() => `🔓 Seats at ${restaurantName()} — ${lockLabel(pick)}, ${partySize} guests\nTrying to lock it…`, "opened");
         }
-        if (!time) {
-          note(`👀 No table for ${partySize} at ${myDate} ${targetTime}${flexMinutes ? ` ±${flexMinutes} min` : ""} — not sending a lock`);
+        if (!pick) {
+          note(`👀 No table for ${partySize} at ${targets.length > 1 ? `any of ${targets.length} targets` : lockLabel(targets[0])}${flexMinutes ? ` (±${flexMinutes} min)` : ""} — not sending a lock`);
           setStatus(`👀 Monitoring — no seats (check ${checks})`, "waiting");
         } else {
-          if (time !== targetTime) log(`🔀 ${targetTime} not available — trying ${time} instead`);
-          const ok = await snipeApi({ ...config, experienceId: exp.id, expSource: "manual", releaseTime: null, quiet: true, timeParam: time });
+          if (pick.timeParam !== pick.target.timeParam) log(`🔀 ${lockLabel(pick.target)} not available — trying ${lockLabel(pick)} instead`);
+          else if (pick.target !== targets[0]) log(`🔀 Trying ${lockLabel(pick)} (target ${targets.indexOf(pick.target) + 1})`);
+          const lockTarget = { date: pick.date, time: timeParamToDisplay(pick.timeParam), timeParam: pick.timeParam };
+          const ok = await snipeApi({ ...config, experienceId: exp.id, expSource: "manual", releaseTime: null, quiet: true, lockTargets: [lockTarget] });
           if (ok) return;
           const reason = JSON.parse(sessionStorage.getItem("tockLockResult") || "{}").summary || "no slot";
           if (/429/.test(reason)) wait = MONITOR_429_BACKOFF_MS;
-          note(`👀 Lock ${myDate} ${time} failed: ${reason}`);
+          note(`👀 Lock ${lockLabel(pick)} failed: ${reason}`);
           setStatus(`👀 Monitoring — lock failed (check ${checks})`, "waiting");
         }
       }
@@ -957,15 +972,40 @@ function displayTimeToParam24(time) {
   return `${String(hour).padStart(2, "0")}:${minute}`;
 }
 
+// Lock targets, in priority order: [{ date, time, timeParam }]. An API tab opened with _tidx=api handles
+// every API target of the run (one tab, one shared request budget); older/numbered tabs handle their own.
+function apiTargets(config) {
+  const fallbackTime = targetFromUrl().timeParam || "";
+  const norm = (t) => ({ date: t.date, time: t.time || timeParamToDisplay(fallbackTime), timeParam: t.timeParam || displayTimeToParam24(t.time || "") || fallbackTime });
+  if (!myTarget?.group) return [norm({ ...myTarget, date: myDate })];
+  return (config.targets || []).filter((t) => (t.mode || "api") === "api").map(norm);
+}
+
+const lockLabel = (t) => `${t.date} ${timeParamToDisplay(t.timeParam) || t.timeParam}`;
+
+// The first target with a table for the party: exact times in priority order first, then (flexMinutes > 0)
+// the closest open time to each target, again in priority order. → { date, timeParam, target } or null
+function chooseTarget(slots, targets, partySize, expIds, flexMinutes = 0) {
+  const byDate = {};
+  const openOn = (date) => (byDate[date] ||= openTimesFor(slots, partySize, date, expIds));
+  for (const t of targets) if (openOn(t.date)[t.timeParam]) return { date: t.date, timeParam: t.timeParam, target: t };
+  if (flexMinutes > 0) {
+    for (const t of targets) {
+      const time = pickTime(openOn(t.date), t.timeParam, flexMinutes);
+      if (time) return { date: t.date, timeParam: time, target: t };
+    }
+  }
+  return null;
+}
+
 async function snipeApi(config) {
   const partySize = config.partySize || 2;
-  // config.timeParam: the monitor may pick a nearby open time instead of the target's
-  const timeParam = config.timeParam || myTarget.timeParam || displayTimeToParam24(myTarget.time || "");
-  if (!timeParam) {
+  // config.lockTargets: the monitor passes the one time it picked (maybe a nearby one)
+  const targets = (config.lockTargets || apiTargets(config)).filter((t) => t.date && t.timeParam);
+  if (!targets.length) {
     log("❌ API: No target time", "error");
     return false;
   }
-  const datetime = `${myDate}T${timeParam}`;
   const headers = getTockHeaders();
   const say = config.quiet ? () => {} : log; // monitor attempts stay quiet except for results
   say(`🔑 Headers: ${describeHeaders(headers)}`);
@@ -981,12 +1021,14 @@ async function snipeApi(config) {
     return false;
   }
   let experienceId = manualId;
-  let body = experienceId ? buildLockRequest(partySize, datetime, experienceId) : null;
-  say(`🚀 API lock: ${datetime}, ${partySize} guests, exp ${experienceId || "(waiting for offerings)"} [${expSource}]`);
+  const buildBodies = () => targets.map((t) => buildLockRequest(partySize, `${t.date}T${t.timeParam}`, experienceId));
+  let bodies = experienceId ? buildBodies() : null;
+  say(`🚀 API lock: ${targets.map(lockLabel).join(" → ")}, ${partySize} guests, exp ${experienceId || "(waiting for offerings)"} [${expSource}]`);
 
   // Burst: concurrent offerings + lock requests following API_SCHEDULE around the release time,
-  // until API_BURST_AFTER_MS after it. First lock success wins. Stops early on sold-out
-  // (410 streak after release) or rate limiting (429). Local clock (NTP).
+  // until API_BURST_AFTER_MS after it. The sends are shared by all targets, round-robin in priority
+  // order, so more targets don't mean more requests. First lock success wins. Stops early when every
+  // target is sold out (410 streak after release) or on rate limiting (429). Local clock (NTP).
   const releaseMs = config.releaseTime ? new Date(config.releaseTime).getTime() : Date.now();
   const endMs = releaseMs + API_BURST_AFTER_MS;
   // Started after the burst window (tab opened late, or no release time): one attempt, no burst
@@ -998,7 +1040,7 @@ async function snipeApi(config) {
   const useExperience = (exp, source) => {
     if (!exp || exp.id === experienceId) return;
     experienceId = exp.id;
-    body = buildLockRequest(partySize, datetime, experienceId);
+    bodies = buildBodies();
     log(`🎟️ Experience from ${source}: ${exp.id} ${exp.name}`, "success");
   };
 
@@ -1031,18 +1073,29 @@ async function snipeApi(config) {
     return true;
   };
 
-  let soldOutStreak = 0;
+  // Per-target sold-out tracking; a sold-out target leaves the rotation
+  const soldOutStreak = targets.map(() => 0);
+  const soldOut = new Set();
+  let nextIdx = 0;
+  const nextTarget = () => {
+    for (let k = 0; k < targets.length; k++) {
+      const i = (nextIdx + k) % targets.length;
+      if (!soldOut.has(i)) { nextIdx = i + 1; return i; }
+    }
+    return -1;
+  };
 
   let lastLockMsg = "";
-  const fireOne = async (n) => {
-    if (!body) return; // no experience ID yet
+  const fireOne = async (n, i = nextTarget()) => {
+    if (!bodies || i < 0) return; // no experience ID yet / everything sold out
+    const target = targets[i];
     const sentAt = Date.now();
     stats.lockSent++;
     try {
       const res = await fetch("/api/ticket/group/lock", {
         method: "PUT",
         headers,
-        body,
+        body: bodies[i],
         credentials: "include",
       });
       if (done) return;
@@ -1054,11 +1107,11 @@ async function snipeApi(config) {
         done = true;
         resolveWin(true); // first: nothing below may keep the caller waiting
         const summary = summarizeLockResponse(resData);
-        log(`✅ API lock success! Attempt ${n}: ${summary}`, "success");
+        log(`✅ API lock success! ${lockLabel(target)}, attempt ${n}: ${summary}`, "success");
         setStatus("🛒 Slot locked! Loading checkout...", "success");
-        sessionStorage.setItem("tockLockResult", JSON.stringify({ ok: true, attempt: n, summary }));
+        sessionStorage.setItem("tockLockResult", JSON.stringify({ ok: true, attempt: n, summary, label: lockLabel(target) }));
         const bizSlug = location.pathname.split("/")[1];
-        notify(() => `🎉 Locked ${bookingLabel(config)}!\nComplete checkout within ~10 min in the browser.\n${location.origin}/${bizSlug}`);
+        notify(() => `🎉 Locked ${bookingLabel(config, target)}!\nComplete checkout within ~10 min in the browser.\n${location.origin}/${bizSlug}`);
         location.href = `/${bizSlug}/checkout/confirm-purchase`;
         return;
       }
@@ -1069,13 +1122,16 @@ async function snipeApi(config) {
       if (status === 429 && on429()) return;
       // 410 is expected right at release (slots not open yet); only trust it well after release
       if (status === 410 && sentAt >= releaseMs + SOLD_OUT_GRACE_MS) {
-        if (++soldOutStreak >= SOLD_OUT_STREAK) {
-          log(`🈵 Sold out — ${soldOutStreak} consecutive 410s after release: ${tockErr?.message || ""}`, "error");
-          stop("sold out (410)");
-          return;
+        if (++soldOutStreak[i] >= SOLD_OUT_STREAK && !soldOut.has(i)) {
+          soldOut.add(i);
+          log(`🈵 ${lockLabel(target)} sold out — ${soldOutStreak[i]} consecutive 410s after release: ${tockErr?.message || ""}`, "error");
+          if (soldOut.size === targets.length) {
+            stop("sold out (410)");
+            return;
+          }
         }
       } else if (status !== 410) {
-        soldOutStreak = 0;
+        soldOutStreak[i] = 0;
       }
       // Log only when the failure changes, so a 300-request burst doesn't flood the overlay
       const msg = tockErr ? `${tockErr.status} ${tockErr.message}` : `HTTP ${res.status}`;
@@ -1111,48 +1167,53 @@ async function snipeApi(config) {
     }
   };
 
-  // Single attempt (no release-time race): check offerings + calendar first and skip a lock that can't
-  // succeed — every lock counts against the rate limit. Not done for the burst, where waiting ~150ms for
-  // the answer would miss the release, nor for monitor attempts (quiet), which check before calling.
+  // Single attempt (no release-time race): check offerings + calendar first and lock only the
+  // highest-priority target with a table — every lock counts against the rate limit. Not done for the
+  // burst, where waiting ~150ms for the answer would miss the release, nor for monitor attempts (quiet),
+  // which check before calling. → { skip: reason } or { index } (target to lock)
   const precheck = async () => {
-    const seen = (open, rateLimited = false) => { lastPrecheck = { at: Date.now(), open, rateLimited }; };
+    const seen = (slots, rateLimited = false) => { lastPrecheck = { at: Date.now(), slots, expId: experienceId, rateLimited }; };
     try {
       if (expSource !== "manual") {
         stats.offeringsSent++;
         const experiences = await fetchOfferings(headers);
         offeringsFound = true;
-        if (!experiences.length) { seen({}); return "no experience listed"; }
+        if (!experiences.length) { seen([]); return { skip: "no experience listed" }; }
         log(`📋 Offerings: ${formatExperiences(experiences)}`);
         useExperience(pickExperience(experiences, partySize, manualId), "offerings");
         const exp = experiences.find((e) => e.id === experienceId);
-        if (exp?.partySizes.length && !exp.partySizes.includes(partySize)) { seen({}); return `${exp.name} is listed for ${partyRange(exp.partySizes)}`; }
+        if (exp?.partySizes.length && !exp.partySizes.includes(partySize)) { seen([]); return { skip: `${exp.name} is listed for ${partyRange(exp.partySizes)}` }; }
       }
-      if (!experienceId) return "";
-      const open = openTimesFor(await fetchCalendar(headers), partySize, myDate, [experienceId]);
-      seen(open);
-      if (!open[timeParam]) return `no table for ${partySize} at ${myDate} ${timeParam}${Object.keys(open).length ? ` (open that day: ${formatOpenTimes(open)})` : ""}`;
+      if (!experienceId) return { index: 0 };
+      const slots = await fetchCalendar(headers);
+      seen(slots);
+      const pick = chooseTarget(slots, targets, partySize, [experienceId]);
+      if (pick) return { index: targets.indexOf(pick.target) };
+      const open = openTimesFor(slots, partySize, targets[0].date, [experienceId]);
+      const what = targets.length > 1 ? `any of ${targets.length} targets` : lockLabel(targets[0]);
+      return { skip: `no table for ${partySize} at ${what}${targets.length === 1 && Object.keys(open).length ? ` (open that day: ${formatOpenTimes(open)})` : ""}` };
     } catch (err) {
-      if (err.status === 429) { seen({}, true); return "rate limited (429)"; }
+      if (err.status === 429) { seen([], true); return { skip: "rate limited (429)" }; }
       log(`📋 Pre-check failed (${err.message}) — trying anyway`);
     }
-    return "";
+    return { index: 0 };
   };
 
   if (singleShot) {
     say("⏱️ Past the release window — single attempt, no burst");
-    const skip = config.quiet ? "" : await precheck();
-    if (skip) {
-      log(`🛑 No lock sent: ${skip}`);
-      stop(`skipped: ${skip}`);
+    const check = config.quiet ? { index: 0 } : await precheck();
+    if (check.skip) {
+      log(`🛑 No lock sent: ${check.skip}`);
+      stop(`skipped: ${check.skip}`);
     } else {
       if (!offeringsFound) await fireOfferings();
-      if (body) await fireOne(++attempt);
-      stop(body ? "single attempt" : "no experience ID");
+      if (bodies) await fireOne(++attempt, check.index);
+      stop(bodies ? "single attempt" : "no experience ID");
     }
   } else {
     // Send at precomputed absolute times: densest around release (see API_SCHEDULE)
     const fireTimes = buildFireTimes(releaseMs);
-    log(`🗓️ ${fireTimes.length} sends planned, ${-API_SCHEDULE[0].from}ms before to ${API_BURST_AFTER_MS}ms after release`);
+    log(`🗓️ ${fireTimes.length} sends planned${targets.length > 1 ? `, shared by ${targets.length} targets in turn` : ""}, ${-API_SCHEDULE[0].from}ms before to ${API_BURST_AFTER_MS}ms after release`);
     let lastOfferingsAt = -Infinity;
     for (const t of fireTimes) {
       await waitUntil(t);
@@ -1162,7 +1223,7 @@ async function snipeApi(config) {
         lastOfferingsAt = Date.now();
         fireOfferings();
       }
-      if (body) fireOne(++attempt);
+      if (bodies) fireOne(++attempt);
     }
     // Let in-flight responses land (a success may still arrive), then give up
     if (!done) await Promise.race([won, sleep(2000)]);

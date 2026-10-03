@@ -73,6 +73,7 @@
   .chip.pick { cursor: pointer; padding-right: 9px; border: 1px solid transparent; background: var(--accent-soft); color: var(--text); }
   .chip.pick:hover { border-color: var(--accent); }
   .chip.pick.selected { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .chip .rank { display: inline-grid; place-items: center; min-width: 15px; height: 15px; margin-right: 5px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 700; }
   .chip.pick .meta { color: var(--muted); font-weight: 400; margin-left: 4px; }
   .chip.pick.nofit .meta { color: var(--danger); }
   .chip.pick.nofit .meta::after { content: " ✕"; }
@@ -182,7 +183,7 @@
       <button type="button" id="addTime">Add</button>
     </div>
     <div class="chips" id="timeChips"></div>
-    <small>One tab per date × time.</small>
+    <small>Priority = the order you add them: API tries every time of date 1, then date 2… To reorder, remove and re-add.</small>
   </section>
 
   <section class="card">

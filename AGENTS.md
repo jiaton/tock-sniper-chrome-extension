@@ -13,8 +13,9 @@ popup.js (config UI)
     │   { url, partySize, releaseTime, prefTimes, snipeMode, experienceId, expSource, dates, targets[],
     │     monitor: { enabled, intervalSec, hours, flexMinutes }, notify: { telegram: { enabled, token, chatId } } }
     │
-    └── On "Arm": builds targets[], opens one tab per target with ?_tidx=N
-                  Each target has: { date, time, experienceId, mode, url }
+    └── On "Arm": builds targets[] (date-major: every time of date 1, then date 2 — in the order added),
+                  opens ONE API tab (?_tidx=api) for all API targets + one DOM tab per DOM target (?_tidx=N)
+                  Each target has: { date, time, experienceId, mode, url, searchUrl }
 
 chrome.storage.local (shared)
     │
@@ -22,8 +23,8 @@ chrome.storage.local (shared)
 
 content.js (per tab)
     │
-    ├── First load: reads _tidx from URL → gets config.targets[_tidx]
-    │   Saves to sessionStorage (survives reload)
+    ├── First load: reads _tidx from URL → config.targets[_tidx], or for _tidx=api every API target
+    │   (myTarget = the top one with group: count). Saves to sessionStorage (survives reload)
     │
     ├── After reload: reads from sessionStorage (no race, no shared state)
     │
@@ -31,17 +32,20 @@ content.js (per tab)
 ```
 
 ### Target Assignment
-- Popup assigns each tab a **deterministic index** via `?_tidx=N` in the URL
-- Content script reads `_tidx` once, looks up `config.targets[N]`, saves to sessionStorage
+- **API**: one tab (`?_tidx=api`) handles every API target, by priority (`apiTargets(config)`). One tab means one
+  request budget: Cloudflare 429s after ~50 requests in ~0.6s per client, and N tabs bursting separately sent N×42.
+- **DOM**: one tab per target via `?_tidx=N` (it clicks the page, so one date/time per tab)
+- **Priority** = the order dates and times were added in the popup (chips are numbered); date-major
+- Content script reads `_tidx` once, looks up its target(s), saves to sessionStorage
 - After reload (DOM mode), target is restored from sessionStorage
 - No race conditions, no shared counters
 
 ### Snipe Modes
-| Mode | Tabs per date/time | Behavior |
+| Mode | Tabs | Behavior |
 |------|-------------------|----------|
-| ⚡ API Direct | 1 | No reload. ~42 `PUT /api/ticket/group/lock` sends centered on the release time (5ms apart within ±40ms, sparser outward, T-100ms … T+3s), plus offerings ≤ every 50ms until an experience is listed. First lock success wins; stops on sold-out or 429. A tab starting after T+3s sends once, only if offerings + calendar show a table for the party. |
-| 🖱️ DOM Click | 1 | Reloads 800ms before release, clicks through the booking dialog. Retries (reload) up to 3× within 10s if the page shows no availability. |
-| 🔥 Both | 2 | Opens separate API + DOM tabs. They run in parallel, independently. |
+| ⚡ API Direct | 1 for all | No reload. Sends are shared round-robin by all targets in priority order (a target leaves the rotation once sold out). ~42 `PUT /api/ticket/group/lock` sends centered on the release time (5ms apart within ±40ms, sparser outward, T-100ms … T+3s), plus offerings ≤ every 50ms until an experience is listed. First lock success wins; stops on sold-out or 429. A tab starting after T+3s sends once, only if offerings + calendar show a table for the party. |
+| 🖱️ DOM Click | 1 per target | Reloads 800ms before release, clicks through the booking dialog. Retries (reload) up to 3× within 10s if the page shows no availability. |
+| 🔥 Both | 1 + 1 per target | One API tab for all targets plus a DOM tab per target. They run in parallel, independently. |
 
 ### Tab Lifecycle
 ```
@@ -251,8 +255,10 @@ Tabs opened before the extension was (re)loaded have no content script — the p
   until an experience is listed. **A listed experience is not availability** — sold-out venues keep
   listing theirs (Fù Huì Huá, 2026-10-03: listed, page says "All reservations sold out"). Once listed, each
   check also reads the calendar and logs on change `🔓 Seats <date>, N guests: <times>` or `🈵 No seats`.
-  It locks only a time with a table for the party: the target time, else the closest open time within
-  `±flexMinutes` (default 60; 0 = exact only); no seats → no lock request. If the calendar can't be read it
+  One offerings + one calendar request per check covers every target (`chooseTarget`): it locks the first
+  target, by priority, whose exact time has a table for the party; failing that, the closest open time
+  within `±flexMinutes` (default 60; 0 = exact only) of each target, again by priority. No seats → no lock
+  request. If the calendar can't be read it
   just tries the target time. Offerings answering 400 "Reservations are currently unavailable" is logged
   as `🔒 Booking switched off`. Right after a pre-checked single attempt (e.g. a tab reloaded after release), the first
   check waits one interval (10 min if the pre-check got a 429) unless the pre-check already saw a usable nearby

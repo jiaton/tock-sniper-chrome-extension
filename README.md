@@ -17,9 +17,9 @@ Auto-grab reservations on [Tock](https://www.exploretock.com) the instant they d
 
 1. **Set your target** — restaurant URL (or open the restaurant and click **Use this page**), party size, dates and times
 2. **Set the release time** — prefilled from the page when it says when reservations open
-3. **Arm the sniper** — opens one tab per date × time (two with **Both** mode)
+3. **Arm the sniper** — **API** opens one tab for all your dates × times; **DOM** opens one tab per date × time (**Both** does both)
 4. **At release** each tab races, in its mode:
-   - **⚡ API** — sends Tock's lock request directly, densest right at the release moment (5ms apart within ±40ms, ~42 requests over 3s), then jumps to checkout
+   - **⚡ API** — sends Tock's lock request directly, densest right at the release moment (5ms apart within ±40ms, ~42 requests over 3s, shared by all your targets in priority order), then jumps to checkout
    - **🖱️ DOM** — reloads 800ms early and clicks through the booking dialog; reloads again if the page shows no availability
 5. **Complete payment** on whichever tab reaches checkout ✅
 
@@ -27,7 +27,8 @@ Auto-grab reservations on [Tock](https://www.exploretock.com) the instant they d
 
 - **API direct locking** — no page reload; first successful lock wins
 - **Experience ID auto-detect** — reads Tock's experience list at release, so a stale/seasonal ID is corrected (or pick **Manual only** for the fastest path)
-- **Rate-limit aware** — stops at the first 429 and on sold-out (410) responses; a tab opened long after release sends a single attempt instead of a burst
+- **Priorities** — dates and times are tried in the order you add them (date first); more targets don't mean more requests
+- **Rate-limit aware** — stops at the first 429 and on sold-out (410) responses; a tab opened long after release checks the calendar and sends at most one lock
 - **Monitor** *(optional)* — if nothing gets booked (release delayed, sold out), keeps checking whether the restaurant has opened, reads which times still have a table for your party, and locks your time — or the closest open one within a range you choose (±1 hour by default)
 - **Activity log** — every tab's log is kept in the browser (survives reloads) and can be exported as a text file
 - **Telegram notifications** *(optional)* — when a slot is locked, bookings open, or monitoring starts/ends (once per restaurant, not per tab)

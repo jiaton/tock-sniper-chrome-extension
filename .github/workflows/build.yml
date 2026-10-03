@@ -28,6 +28,7 @@ jobs:
           zip -r tock-sniper-ext.zip \
             manifest.json \
             content.js \
+            page-hook.js \
             popup.js \
             popup.html \
             background.js \

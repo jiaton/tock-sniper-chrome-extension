@@ -1,107 +1,30 @@
 const $ = (s) => document.querySelector(s);
-const $$ = (s) => document.querySelectorAll(s);
 
-// ── Slot management ──
-function addSlotUI(date = "") {
-  const div = document.createElement("div");
-  div.className = "slot";
-  div.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center">
-      <span class="slot-header">Target Date</span>
-      <button class="remove-btn" title="Remove">✕</button>
-    </div>
-    <input type="date" class="slot-date" value="${date}" />
-  `;
-  div.querySelector(".remove-btn").addEventListener("click", () => { div.remove(); updateButton(); saveConfig(); });
-  div.querySelector(".slot-date").addEventListener("input", saveConfig);
-  $("#slots").appendChild(div);
-}
+// Target dates ("YYYY-MM-DD") and times ("5:00 PM"), kept sorted and de-duplicated
+const state = { dates: [], times: [] };
+let armedState = false;
+let savedTimer = null;
+const clampParty = (n) => Math.min(20, Math.max(1, n));
 
-function getNextFriSatSun() {
-  const now = new Date();
-  const dates = [];
-  // Find next Friday (or the one after if today is Friday past release)
-  let d = new Date(now);
-  while (d.getDay() !== 5) d.setDate(d.getDate() + 1);
-  // That Friday + 7 days = next week's Fri/Sat/Sun
-  const nextFri = new Date(d);
-  nextFri.setDate(nextFri.getDate() + 7);
-  for (let i = 0; i < 3; i++) {
-    const dt = new Date(nextFri);
-    dt.setDate(dt.getDate() + i);
-    dates.push(dt.toISOString().split("T")[0]);
-  }
-  return dates;
-}
+const EXP_SOURCE_HINTS = {
+  hybrid: "Locks with your ID from the first request; switches if Tock lists a different experience at release.",
+  manual: "Locks with your ID only. No offerings lookups — fastest, but fails if the ID is stale.",
+  auto: "Ignores your ID; waits for Tock's experience list at release. Costs one round trip (~150ms).",
+};
 
-// ── Init ──
-function defaultReleaseTime() {
-  const d = new Date();
-  d.setHours(19, 45, 0, 0);
-  // format for datetime-local: YYYY-MM-DDTHH:MM:SS
-  return d.toLocaleString("sv-SE", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).replace(" ", "T");
-}
+const SNIPE_MODE_HINTS = {
+  api: "Sends the lock request directly at release time. No page reload.",
+  dom: "Reloads just before release and clicks through the booking dialog.",
+  both: "Opens an API tab and a DOM tab per date × time; they run independently.",
+};
 
-chrome.storage.local.get(["config", "sniping", "status"], (d) => {
-  if (d.config) {
-    $("#url").value = d.config.url || "";
-    $("#partySize").value = d.config.partySize || 2;
-    $("#releaseTime").value = d.config.releaseTime || defaultReleaseTime();
-    $("#prefTimes").value = (d.config.prefTimes || []).join(", ");
-    $("#snipeMode").value = d.config.snipeMode || "api";
-    $("#experienceId").value = d.config.experienceId || "";
-    (d.config.dates || []).forEach((dt) => addSlotUI(dt));
-    // Auto-parse experience ID from URL if not already saved
-    if (!d.config.experienceId && d.config.url) {
-      const expMatch = d.config.url.match(/\/experience\/(\d+)/);
-      if (expMatch) {
-        $("#experienceId").value = expMatch[1];
-        saveConfig();
-      }
-    }
-  } else {
-    $("#releaseTime").value = defaultReleaseTime();
-  }
-  if (!d.config?.dates?.length) {
-    getNextFriSatSun().forEach((dt) => addSlotUI(dt));
-  }
-  updateButton(d.sniping);
-  if (d.status) showStatus(d.status.msg, d.status.type);
-});
+const radioValue = (name) => document.querySelector(`input[name="${name}"]:checked`)?.value;
+const setRadio = (name, value) => {
+  const el = document.querySelector(`input[name="${name}"][value="${value}"]`);
+  if (el) el.checked = true;
+};
 
-chrome.storage.onChanged.addListener((changes) => {
-  if (changes.status) showStatus(changes.status.newValue.msg, changes.status.newValue.type);
-  if (changes.sniping) updateButton(changes.sniping.newValue);
-});
-
-function updateButton(armed) {
-  const btn = $("#startBtn");
-  const count = $$(".slot-date").length;
-  const timeCount = Math.max(1, parseCsv($("#prefTimes").value || "").length);
-  const modeMultiplier = $("#snipeMode").value === "both" ? 2 : 1;
-  const tabCount = Math.max(1, count) * timeCount * modeMultiplier;
-  btn.textContent = armed ? "⏹ Disarm All" : `⚡ Arm Sniper (opens ${tabCount} tab${tabCount !== 1 ? "s" : ""})`;
-  btn.className = armed ? "active" : "";
-}
-
-function showStatus(msg, type) {
-  const el = $("#status");
-  el.textContent = msg;
-  el.className = type;
-}
-
-const parseCsv = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
-
-function parseTockUrl(url) {
-  try {
-    const parsed = new URL(url);
-    if (!parsed.hostname.endsWith("exploretock.com")) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
+// ── Time helpers ──
 function displayTimeToParam(time) {
   const trimmed = time.trim();
   const twentyFour = trimmed.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
@@ -128,11 +51,308 @@ function paramTimeToDisplay(time) {
   return `${hour}:${minute} ${meridiem}`;
 }
 
-function buildTargetUrl(baseUrl, date, partySize, targetTime) {
+function formatDateChip(date) {
+  const d = new Date(`${date}T12:00:00`);
+  if (isNaN(d)) return date;
+  return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
+
+// ── Chips ──
+function renderChips(container, items, label, onRemove, emptyText) {
+  container.replaceChildren();
+  if (!items.length) {
+    const empty = document.createElement("span");
+    empty.className = "empty";
+    empty.textContent = emptyText;
+    container.appendChild(empty);
+    return;
+  }
+  items.forEach((item) => {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.textContent = label(item);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.title = "Remove";
+    remove.textContent = "✕";
+    remove.addEventListener("click", () => onRemove(item));
+    chip.appendChild(remove);
+    container.appendChild(chip);
+  });
+}
+
+function renderTargets() {
+  renderChips($("#dateChips"), state.dates, formatDateChip, (d) => {
+    state.dates = state.dates.filter((x) => x !== d);
+    renderTargets(); saveConfig();
+  }, "No dates yet");
+  renderChips($("#timeChips"), state.times, (t) => t, (t) => {
+    state.times = state.times.filter((x) => x !== t);
+    renderTargets(); saveConfig();
+  }, "No times yet");
+  updateButton();
+}
+
+function addDate(date) {
+  if (!date || state.dates.includes(date)) return false;
+  state.dates = [...state.dates, date].sort();
+  return true;
+}
+
+function addTime(time) {
+  const param = displayTimeToParam(time);
+  const display = paramTimeToDisplay(param);
+  if (!display || state.times.includes(display)) return false;
+  state.times = [...state.times, display].sort((a, b) => displayTimeToParam(a).localeCompare(displayTimeToParam(b)));
+  return true;
+}
+
+function getNextFriSatSun() {
+  const now = new Date();
+  const dates = [];
+  // Find next Friday (or the one after if today is Friday past release)
+  let d = new Date(now);
+  while (d.getDay() !== 5) d.setDate(d.getDate() + 1);
+  // That Friday + 7 days = next week's Fri/Sat/Sun
+  const nextFri = new Date(d);
+  nextFri.setDate(nextFri.getDate() + 7);
+  for (let i = 0; i < 3; i++) {
+    const dt = new Date(nextFri);
+    dt.setDate(dt.getDate() + i);
+    dates.push(dt.toISOString().split("T")[0]);
+  }
+  return dates;
+}
+
+// ── Init ──
+// format for datetime-local: YYYY-MM-DDTHH:MM:SS
+const toDatetimeLocal = (d) =>
+  d.toLocaleString("sv-SE", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).replace(" ", "T");
+
+function defaultReleaseTime() {
+  const d = new Date();
+  d.setHours(19, 45, 0, 0);
+  return toDatetimeLocal(d);
+}
+
+// ── Detect from the open Tock page ──
+// Hours offset from UTC for the abbreviations Tock prints after the release time
+const TZ_OFFSETS = { UTC: 0, GMT: 0, PST: -8, PDT: -7, MST: -7, MDT: -6, CST: -6, CDT: -5, EST: -5, EDT: -4, AKST: -9, AKDT: -8, HST: -10 };
+
+// Wall-clock time in an IANA zone → Date (two passes settle DST edges)
+function zonedWallTime(wall, zone) {
+  const target = Date.UTC(wall.getFullYear(), wall.getMonth(), wall.getDate(), wall.getHours(), wall.getMinutes());
+  const fmt = new Intl.DateTimeFormat("en-US", { timeZone: zone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  let guess = target;
+  for (let i = 0; i < 2; i++) {
+    const p = Object.fromEntries(fmt.formatToParts(new Date(guess)).map((x) => [x.type, x.value]));
+    guess += target - Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute);
+  }
+  return new Date(guess);
+}
+
+// { date: "October 3, 2026", time: "3:00 AM", tz: "UTC" } → Date
+// { date: "October 15, 2026", time: "10:00 AM", source: "restaurant", zone: "America/Los_Angeles" } → Date
+function parseRelease(release) {
+  const wall = new Date(`${release.date} ${release.time}`); // parsed as browser-local wall time
+  if (isNaN(wall)) return null;
+  if (release.source === "restaurant") return release.zone ? zonedWallTime(wall, release.zone) : wall;
+  if (!release.tz) return wall;
+  const localAbbr = new Intl.DateTimeFormat("en-US", { timeZoneName: "short" })
+    .formatToParts(wall).find((p) => p.type === "timeZoneName")?.value;
+  const offset = TZ_OFFSETS[release.tz];
+  // Same zone as the browser, or an abbreviation we can't map: take the wall time as local
+  if (localAbbr === release.tz || offset === undefined) return wall;
+  return new Date(Date.UTC(wall.getFullYear(), wall.getMonth(), wall.getDate(), wall.getHours(), wall.getMinutes()) - offset * 3600e3);
+}
+
+function cleanTockUrl(raw) {
+  const url = new URL(raw);
+  [...url.searchParams.keys()]
+    .filter((k) => k.startsWith("tock_") || k === "_tidx")
+    .forEach((k) => url.searchParams.delete(k));
+  return url.toString();
+}
+
+let activeTockTab = null;
+let detectedRelease = null;
+let lastPageInfo = null;
+
+async function initActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.url || !/^https:\/\/www\.exploretock\.com\//.test(tab.url)) return;
+  activeTockTab = tab;
+  $("#useTab").hidden = false;
+}
+
+function renderExperienceSuggestions(info) {
+  lastPageInfo = info;
+  const box = $("#expSuggestions");
+  box.replaceChildren();
+  box.hidden = false;
+  if (!info.experiences.length) {
+    const empty = document.createElement("span");
+    empty.className = "empty";
+    empty.textContent = info.offeringsError
+      ? `Couldn't list experiences (${info.offeringsError})`
+      : "No experiences listed on this page yet — probably not released.";
+    box.appendChild(empty);
+    return;
+  }
+  const current = parseInt($("#experienceId").value) || null;
+  info.experiences.forEach((e) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "chip pick" + (e.id === current ? " selected" : "");
+    chip.title = e.name;
+    chip.textContent = `${e.id}`;
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    const sizes = e.partySizes.length ? ` · ${Math.min(...e.partySizes)}–${Math.max(...e.partySizes)}p` : "";
+    meta.textContent = `${e.name.length > 28 ? e.name.slice(0, 27) + "…" : e.name}${sizes}`;
+    chip.appendChild(meta);
+    chip.addEventListener("click", () => {
+      $("#experienceId").value = e.id;
+      saveConfig();
+      renderExperienceSuggestions(info);
+    });
+    box.appendChild(chip);
+  });
+}
+
+function renderReleaseSuggestion() {
+  const box = $("#releaseSuggest");
+  if (!detectedRelease) { box.hidden = true; return; }
+  const when = parseRelease(detectedRelease);
+  if (!when) { box.hidden = true; return; }
+  const value = toDatetimeLocal(when);
+  const matches = $("#releaseTime").value && new Date($("#releaseTime").value).getTime() === when.getTime();
+  box.hidden = false;
+  box.classList.toggle("done", matches);
+  $("#releaseSuggestTime").textContent = (matches ? "✓ Matches the page: " : "Page release: ") +
+    when.toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const zoneNote = detectedRelease.source !== "restaurant" ? ""
+    : detectedRelease.zone ? ` · zone guessed from ${detectedRelease.state}: ${detectedRelease.zone.split("/")[1].replace("_", " ")} time`
+    : " · no zone given — assumed your local time";
+  $("#releaseSuggestSrc").textContent = `“${detectedRelease.text.replace(/^.*?released on /i, "")}”${zoneNote}`;
+  $("#releasePrefill").hidden = matches;
+  $("#releasePrefill").onclick = () => {
+    $("#releaseTime").value = value;
+    saveConfig();
+    renderReleaseSuggestion();
+  };
+}
+
+async function useActiveTab() {
+  if (!activeTockTab) return;
+  $("#url").value = cleanTockUrl(activeTockTab.url);
+  syncFieldsFromUrl();
+  saveConfig();
+  $("#urlHint").textContent = "Reading the page…";
+  try {
+    const info = await chrome.tabs.sendMessage(activeTockTab.id, { type: "tockSniper:pageInfo" });
+    if (!info || info.error) throw new Error(info?.error || "no response");
+    if (!$("#experienceId").value && info.currentExperienceId) {
+      $("#experienceId").value = info.currentExperienceId;
+      saveConfig();
+    }
+    renderExperienceSuggestions(info);
+    detectedRelease = info.release;
+    renderReleaseSuggestion();
+    const found = [
+      info.experiences.length ? `${info.experiences.length} experience${info.experiences.length > 1 ? "s" : ""}` : "",
+      info.release ? "release time" : "",
+    ].filter(Boolean).join(" and ");
+    $("#urlHint").textContent = found ? `Found ${found} on the page.` : "Nothing to prefill on this page.";
+  } catch {
+    $("#urlHint").textContent = "URL filled. Reload the Tock tab to also detect experiences and release time.";
+  }
+}
+
+chrome.storage.local.get(["config", "sniping", "status"], (d) => {
+  if (d.config) {
+    $("#url").value = d.config.url || "";
+    $("#partySize").value = d.config.partySize || 2;
+    $("#releaseTime").value = d.config.releaseTime || defaultReleaseTime();
+    setRadio("snipeMode", d.config.snipeMode || "api");
+    setRadio("expSource", d.config.expSource || "hybrid");
+    $("#experienceId").value = d.config.experienceId || "";
+    const mon = d.config.monitor || {};
+    $("#monitorEnabled").checked = !!mon.enabled;
+    $("#monitorInterval").value = mon.intervalSec || 20;
+    $("#monitorHours").value = mon.hours || 6;
+    const tg = d.config.notify?.telegram || {};
+    $("#tgEnabled").checked = !!tg.enabled;
+    $("#tgToken").value = tg.token || "";
+    $("#tgChatId").value = tg.chatId || "";
+    (d.config.dates || []).forEach(addDate);
+    (d.config.prefTimes || []).forEach(addTime);
+    // Auto-parse experience ID from URL if not already saved
+    if (!d.config.experienceId && d.config.url) {
+      const expMatch = d.config.url.match(/\/experience\/(\d+)/);
+      if (expMatch) {
+        $("#experienceId").value = expMatch[1];
+        saveConfig();
+      }
+    }
+  } else {
+    $("#releaseTime").value = defaultReleaseTime();
+  }
+  if (!d.config?.dates?.length) getNextFriSatSun().forEach(addDate);
+  $("#dateInput").value = state.dates[0] || "";
+  updateHints();
+  updateExtras();
+  renderTargets();
+  updateButton(d.sniping);
+  initActiveTab();
+  if (d.status) showStatus(d.status.msg, d.status.type);
+});
+
+chrome.storage.onChanged.addListener((changes) => {
+  if (changes.status) showStatus(changes.status.newValue.msg, changes.status.newValue.type);
+  if (changes.sniping) updateButton(changes.sniping.newValue);
+});
+
+function updateButton(armed = armedState) {
+  armedState = armed;
+  const btn = $("#startBtn");
+  const modeMultiplier = radioValue("snipeMode") === "both" ? 2 : 1;
+  const tabCount = Math.max(1, state.dates.length) * Math.max(1, state.times.length) * modeMultiplier;
+  btn.textContent = armed ? "⏹ Disarm All" : "⚡ Arm Sniper";
+  btn.className = armed ? "active" : "";
+  $("#tabSummary").textContent = armed
+    ? "Sniping — tabs are counting down."
+    : `Opens ${tabCount} tab${tabCount !== 1 ? "s" : ""} (${state.dates.length || 1} date × ${state.times.length || 1} time${modeMultiplier > 1 ? " × 2 modes" : ""})`;
+}
+
+function updateHints() {
+  $("#expSourceHint").textContent = EXP_SOURCE_HINTS[radioValue("expSource")] || "";
+  $("#snipeModeHint").textContent = SNIPE_MODE_HINTS[radioValue("snipeMode")] || "";
+}
+
+function showStatus(msg, type) {
+  const el = $("#status");
+  el.textContent = msg;
+  el.className = type;
+}
+
+function parseTockUrl(url) {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.hostname.endsWith("exploretock.com")) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+// Booking-dialog URL. With an experience ID: /<restaurant>/experience/<id>?date&size&time — the dialog
+// then lists only that experience (Tock fills in the slug). Without one: /<restaurant>/search?…,
+// where Tock picks the experience. Both auto-open the dialog for the given date.
+function buildTargetUrl(baseUrl, date, partySize, targetTime, experienceId = null) {
   const url = new URL(baseUrl);
-  // Ensure path ends with /search so Tock auto-opens the booking dialog
-  const path = url.pathname.replace(/\/search\/?$/, "").replace(/\/$/, "");
-  url.pathname = path + "/search";
+  const restaurant = url.pathname.split("/").filter(Boolean)[0] || "";
+  url.pathname = experienceId ? `/${restaurant}/experience/${experienceId}` : `/${restaurant}/search`;
   url.search = "";
   url.searchParams.set("date", date);
   url.searchParams.set("size", String(partySize));
@@ -161,12 +381,16 @@ function buildTargets(config) {
     const dateTimes = times.length ? times : [""];
     return dateTimes.flatMap((time) => {
       const normalizedTime = paramTimeToDisplay(displayTimeToParam(time)) || time;
+      const searchUrl = buildTargetUrl(config.url, date, config.partySize, normalizedTime);
+      // "auto" ignores the manual ID, so don't pin the page to it either
+      const pageExperienceId = config.expSource === "auto" ? null : experienceId;
       return modes.map((mode) => ({
         date,
         time: normalizedTime,
         experienceId,
         mode,
-        url: buildTargetUrl(config.url, date, config.partySize, normalizedTime),
+        url: pageExperienceId ? buildTargetUrl(config.url, date, config.partySize, normalizedTime, pageExperienceId) : searchUrl,
+        searchUrl, // DOM fallback when the experience page says "couldn't find this reservation"
       }));
     });
   });
@@ -182,53 +406,110 @@ function syncFieldsFromUrl() {
 
   // Extract experience ID from URL path
   const expMatch = parsed.pathname.match(/\/experience\/(\d+)/);
-  if (expMatch) {
-    $("#experienceId").value = expMatch[1];
-  }
+  if (expMatch) $("#experienceId").value = expMatch[1];
 
   if (urlSize) $("#partySize").value = urlSize;
-  if (urlTime && !$("#prefTimes").value.trim()) $("#prefTimes").value = urlTime;
-  if (urlDate) {
-    const dateInputs = [...$$(".slot-date")];
-    if (dateInputs.length === 0) addSlotUI(urlDate);
-    else if (dateInputs.every((input) => input.value !== urlDate)) {
-      dateInputs.forEach((input, idx) => {
-        if (idx === 0) input.value = urlDate;
-        else input.closest(".slot")?.remove();
-      });
-    }
-  }
-  updateButton();
+  if (urlTime && !state.times.length) addTime(urlTime);
+  if (urlDate && !state.dates.includes(urlDate)) state.dates = [urlDate];
+  renderTargets();
 }
 
-$("#addSlot").addEventListener("click", () => {
-  addSlotUI();
-  updateButton();
-  saveConfig();
-});
+function readConfig() {
+  return {
+    url: $("#url").value.trim(),
+    partySize: clampParty(parseInt($("#partySize").value) || 2),
+    releaseTime: $("#releaseTime").value,
+    prefTimes: [...state.times],
+    snipeMode: radioValue("snipeMode"),
+    experienceId: parseInt($("#experienceId").value) || null,
+    expSource: radioValue("expSource"),
+    dates: [...state.dates],
+    monitor: {
+      enabled: $("#monitorEnabled").checked,
+      intervalSec: Math.min(600, Math.max(10, parseInt($("#monitorInterval").value) || 20)),
+      hours: Math.min(48, Math.max(0.1, parseFloat($("#monitorHours").value) || 6)),
+    },
+    notify: {
+      telegram: {
+        enabled: $("#tgEnabled").checked,
+        token: $("#tgToken").value.trim(),
+        chatId: $("#tgChatId").value.trim(),
+      },
+    },
+  };
+}
 
-$("#url").addEventListener("change", () => { syncFieldsFromUrl(); saveConfig(); });
-$("#url").addEventListener("blur", () => { syncFieldsFromUrl(); saveConfig(); });
-$("#url").addEventListener("input", () => { syncFieldsFromUrl(); saveConfig(); });
-$("#prefTimes").addEventListener("input", () => { updateButton(); saveConfig(); });
-$("#partySize").addEventListener("input", saveConfig);
-$("#releaseTime").addEventListener("input", saveConfig);
-$("#snipeMode").addEventListener("change", saveConfig);
-$("#experienceId").addEventListener("input", saveConfig);
+function updateExtras() {
+  const mon = $("#monitorEnabled").checked, tg = $("#tgEnabled").checked;
+  $("#monitorFields").setAttribute("aria-disabled", String(!mon));
+  $("#tgFields").setAttribute("aria-disabled", String(!tg));
+  $("#extrasBadge").textContent = [mon && "monitor", tg && "telegram"].filter(Boolean).join(" + ") || "off";
+}
 
 function saveConfig() {
-  const dates = [...$$(".slot-date")].map((el) => el.value).filter(Boolean);
-  const config = {
-    url: $("#url").value.trim(),
-    partySize: parseInt($("#partySize").value) || 2,
-    releaseTime: $("#releaseTime").value,
-    prefTimes: parseCsv($("#prefTimes").value),
-    snipeMode: $("#snipeMode").value,
-    experienceId: parseInt($("#experienceId").value) || null,
-    dates,
-  };
-  chrome.storage.local.set({ config });
+  chrome.storage.local.set({ config: readConfig() }, () => {
+    const el = $("#saved");
+    el.classList.add("show");
+    clearTimeout(savedTimer);
+    savedTimer = setTimeout(() => el.classList.remove("show"), 1200);
+  });
 }
+
+// ── Events ──
+function stepParty(delta) {
+  $("#partySize").value = clampParty((parseInt($("#partySize").value) || 2) + delta);
+  saveConfig();
+}
+$("#partyMinus").addEventListener("click", () => stepParty(-1));
+$("#partyPlus").addEventListener("click", () => stepParty(1));
+
+$("#addDate").addEventListener("click", () => {
+  if (addDate($("#dateInput").value)) { renderTargets(); saveConfig(); }
+});
+$("#dateInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#addDate").click(); });
+$("#addTime").addEventListener("click", () => {
+  if (addTime($("#timeInput").value)) { renderTargets(); saveConfig(); }
+});
+$("#timeInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#addTime").click(); });
+
+$("#url").addEventListener("input", () => { syncFieldsFromUrl(); saveConfig(); });
+$("#useTab").addEventListener("click", useActiveTab);
+["#monitorEnabled", "#tgEnabled"].forEach((id) => $(id).addEventListener("change", () => { updateExtras(); saveConfig(); }));
+["#monitorInterval", "#monitorHours", "#tgToken", "#tgChatId"].forEach((id) => $(id).addEventListener("input", saveConfig));
+// Show the clamped value once the field is left (readConfig clamps what gets saved)
+["#monitorInterval", "#monitorHours"].forEach((id) => $(id).addEventListener("change", () => {
+  const { intervalSec, hours } = readConfig().monitor;
+  $("#monitorInterval").value = intervalSec;
+  $("#monitorHours").value = hours;
+}));
+$("#tgTest").addEventListener("click", async () => {
+  const out = $("#tgTestResult");
+  out.className = "";
+  out.textContent = "Sending…";
+  try {
+    const r = await chrome.runtime.sendMessage({
+      type: "tockSniper:notify",
+      text: "✅ Tock Sniper test notification",
+      override: { token: $("#tgToken").value.trim(), chatId: $("#tgChatId").value.trim() },
+    });
+    out.className = r?.ok ? "ok" : "err";
+    out.textContent = r?.ok ? "Sent ✓" : `Failed: ${r?.error || "no response"}`;
+  } catch (err) {
+    out.className = "err";
+    out.textContent = `Failed: ${err.message}`;
+  }
+});
+$("#partySize").addEventListener("input", saveConfig);
+$("#releaseTime").addEventListener("input", () => { saveConfig(); renderReleaseSuggestion(); });
+$("#experienceId").addEventListener("input", (e) => {
+  const digits = e.target.value.replace(/\D/g, "");
+  if (digits !== e.target.value) e.target.value = digits; // IDs are plain integers
+  saveConfig();
+  if (lastPageInfo) renderExperienceSuggestions(lastPageInfo);
+});
+document.querySelectorAll('input[name="snipeMode"], input[name="expSource"]').forEach((el) =>
+  el.addEventListener("change", () => { updateHints(); updateButton(); saveConfig(); })
+);
 
 $("#startBtn").addEventListener("click", async () => {
   const armed = (await chrome.storage.local.get("sniping")).sniping;
@@ -237,15 +518,7 @@ $("#startBtn").addEventListener("click", async () => {
     return;
   }
 
-  const dates = [...$$(".slot-date")].map((el) => el.value).filter(Boolean);
-  const config = {
-    url: $("#url").value.trim(),
-    partySize: parseInt($("#partySize").value) || 2,
-    releaseTime: $("#releaseTime").value,
-    prefTimes: parseCsv($("#prefTimes").value),
-    snipeMode: $("#snipeMode").value,
-    dates,
-  };
+  const config = readConfig();
 
   const parsedUrl = parseTockUrl(config.url);
   if (!parsedUrl) {
@@ -266,7 +539,10 @@ $("#startBtn").addEventListener("click", async () => {
     return;
   }
   config.targets = targets;
-  config.experienceId = parseInt($("#experienceId").value) || null;
+  if (config.expSource === "manual" && !config.experienceId && targets.some((t) => t.mode === "api" && !t.experienceId)) {
+    showStatus("Manual ID only needs an Experience ID", "warn");
+    return;
+  }
 
   chrome.storage.local.set({ config, sniping: true });
   showStatus(`Armed! Opening ${targets.length} tab${targets.length !== 1 ? "s" : ""}...`, "info");

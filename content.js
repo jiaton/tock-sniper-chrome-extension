@@ -1,15 +1,42 @@
 // Tock Sniper — content script
 // Simple logic:
-// - Before release time: show countdown, reload at release - 75ms
+// - Before release time: show countdown (DOM mode reloads at release - RELOAD_LEAD_MS)
 // - After release time (including after reload): immediately snipe
 
 let myDate = null;
 let myTarget = null;
 let overlay = null;
-const RELOAD_LEAD_MS = 75;
-// API burst: start 100ms early, fire every 25ms, stop at release time
-const API_EARLY_MS = 100;
-const API_BURST_INTERVAL_MS = 25;
+// DOM mode reload lead. After a reload, Tock requests availability ~1.2–1.5s later (measured
+// 2026-10-02), so reloading 800ms early lands that request ~400–700ms after release.
+const RELOAD_LEAD_MS = 800;
+// If the reloaded page still shows no availability (data fetched too early, or a stale experience
+// ID), reload again — up to DOM_MAX_RETRIES times within DOM_RETRY_WINDOW_MS after release.
+const DOM_MAX_RETRIES = 3;
+const DOM_RETRY_WINDOW_MS = 10000;
+const DOM_UNAVAILABLE_TEXT = /couldn't find this reservation|has sold out all reservations/i;
+// API burst: start 10ms early, fire a request every 10ms WITHOUT waiting for the
+// previous one (concurrent), keep going for a short window after release.
+// API burst pacing, centered on the release time T: densest at T, sparser further away.
+// Tock/Cloudflare answered HTTP 429 after ~50 requests in ~0.6s (2026-10-02); this schedule sends ~41.
+// Each row: from this offset (ms, relative to T) on, one request (not awaiting responses) every `every` ms.
+const API_SCHEDULE = [
+  { from: -100, every: 20 },  // T-100 … T-40   ~3
+  { from: -40, every: 5 },    // T-40  … T+40   ~16
+  { from: 40, every: 15 },    // T+40  … T+100  ~4
+  { from: 100, every: 50 },   // T+100 … T+500  ~8
+  { from: 500, every: 250 },  // T+500 … T+3s   ~10
+];
+const API_BURST_AFTER_MS = 3000;    // burst ends at T+3s; a tab starting later sends a single request
+const API_MAX_429 = 1;              // stop at the first 429: more requests only extend the block
+const OFFERINGS_MIN_GAP_MS = 50;    // offerings rides along with lock sends, but at most every 50ms
+// "Someone else just selected this" (410) for requests sent this long after release means the slot is gone
+const SOLD_OUT_GRACE_MS = 500;
+const SOLD_OUT_STREAK = 3;
+const FALLBACK_BUILD_NUMBER = "servingstack-2026-09-30RC03-00";
+// Monitor (opt-in, config.monitor): after a failed snipe, poll offerings until bookings open, then try
+// one lock per check. Lock 429s were still being returned ~28 min after a burst (2026-10-02) while
+// offerings kept answering, so lock is only tried once the venue lists experiences.
+const MONITOR_429_BACKOFF_MS = 10 * 60 * 1000;
 
 function createOverlay() {
   overlay = document.createElement("div");
@@ -25,11 +52,14 @@ function createOverlay() {
       #tock-sniper-overlay .ts-header {
         padding: 8px 12px; background: #16213e; font-weight: 700; font-size: 14px;
         display: flex; justify-content: space-between; align-items: center;
+        cursor: grab; user-select: none; touch-action: none;
       }
+      #tock-sniper-overlay.ts-dragging { opacity: 0.92; }
+      #tock-sniper-overlay.ts-dragging .ts-header { cursor: grabbing; }
       #tock-sniper-overlay .ts-header span { opacity: 0.65; font-size: 11px; text-align: right; }
       #tock-sniper-overlay .ts-clock {
         padding: 6px 12px; background: #101629; color: #b5d4ff; font-variant-numeric: tabular-nums;
-        display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; font-size: 11px;
+        display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 11px;
       }
       #tock-sniper-overlay .ts-clock strong { color: #fff; font-weight: 700; display: block; }
       #tock-sniper-overlay .ts-log {
@@ -48,16 +78,71 @@ function createOverlay() {
       #tock-sniper-overlay .ts-status.success { background: #2f9e44; }
       #tock-sniper-overlay .ts-status.error { background: #c92a2a; }
     </style>
-    <div class="ts-header">🎯 Tock Sniper <span id="ts-date"></span></div>
+    <div class="ts-header" title="Drag to move · double-click to reset">🎯 Tock Sniper <span id="ts-date"></span></div>
     <div class="ts-clock">
       <div>Local<strong id="ts-local">--:--:--.---</strong></div>
-      <div>Server (est.)<strong id="ts-now">--:--:--.---</strong></div>
       <div>Countdown<strong id="ts-countdown">--:--.---</strong></div>
     </div>
     <div class="ts-status waiting" id="ts-status">Initializing...</div>
     <div class="ts-log" id="ts-log"></div>
   `;
   document.body.appendChild(overlay);
+  makeOverlayDraggable(overlay, overlay.querySelector(".ts-header"));
+}
+
+// Drag the overlay by its header. The position is remembered (localStorage) so it survives the
+// DOM-mode reload and applies to every Tock tab; double-click the header to go back to top-right.
+const OVERLAY_POS_KEY = "tockSniperOverlayPos";
+
+function placeOverlay(el, left, top) {
+  const maxLeft = Math.max(0, window.innerWidth - el.offsetWidth);
+  const maxTop = Math.max(0, window.innerHeight - 40); // keep at least the header on screen
+  el.style.left = `${Math.min(Math.max(0, left), maxLeft)}px`;
+  el.style.top = `${Math.min(Math.max(0, top), maxTop)}px`;
+  el.style.right = "auto";
+}
+
+function makeOverlayDraggable(el, handle) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(OVERLAY_POS_KEY) || "null");
+    if (Number.isFinite(saved?.left) && Number.isFinite(saved?.top)) placeOverlay(el, saved.left, saved.top);
+  } catch {}
+
+  let start = null;
+  handle.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    const rect = el.getBoundingClientRect();
+    start = { x: e.clientX, y: e.clientY, left: rect.left, top: rect.top, moved: false };
+    handle.setPointerCapture(e.pointerId);
+    el.classList.add("ts-dragging");
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!start) return;
+    const dx = e.clientX - start.x, dy = e.clientY - start.y;
+    if (!start.moved && Math.hypot(dx, dy) < 3) return; // a click, not a drag
+    start.moved = true;
+    placeOverlay(el, start.left + dx, start.top + dy);
+  });
+  const end = () => {
+    if (!start) return;
+    const { moved } = start;
+    start = null;
+    el.classList.remove("ts-dragging");
+    if (!moved) return;
+    try {
+      localStorage.setItem(OVERLAY_POS_KEY, JSON.stringify({ left: parseFloat(el.style.left), top: parseFloat(el.style.top) }));
+    } catch {}
+  };
+  handle.addEventListener("pointerup", end);
+  handle.addEventListener("pointercancel", end);
+  handle.addEventListener("dblclick", () => {
+    el.style.left = el.style.right = el.style.top = "";
+    try { localStorage.removeItem(OVERLAY_POS_KEY); } catch {}
+  });
+  // Keep it on screen when the window shrinks
+  window.addEventListener("resize", () => {
+    if (el.style.left) placeOverlay(el, parseFloat(el.style.left), parseFloat(el.style.top));
+  });
 }
 
 function setStatus(text, type = "waiting") {
@@ -73,6 +158,7 @@ function addLog(msg, type = "info") {
   entry.className = `ts-entry ${type}`;
   entry.innerHTML = `<span class="ts-time">${time}</span>${msg}`;
   logEl.appendChild(entry);
+  while (logEl.childElementCount > 300) logEl.firstElementChild.remove(); // long monitor runs
   logEl.scrollTop = logEl.scrollHeight;
 }
 
@@ -101,10 +187,8 @@ function formatCountdown(ms) {
 
 function updateClock(releaseMs = 0) {
   const localEl = document.getElementById("ts-local");
-  const nowEl = document.getElementById("ts-now");
   const countdownEl = document.getElementById("ts-countdown");
   if (localEl) localEl.textContent = formatClock(Date.now());
-  if (nowEl) nowEl.textContent = formatClock(nowMs());
   if (countdownEl) countdownEl.textContent = releaseMs ? formatCountdown(releaseMs - nowMs()) : "--:--.---";
 }
 
@@ -132,6 +216,37 @@ function timeParamToDisplay(timeParam) {
 
 function targetLabel(target) {
   return [target.date, target.time].filter(Boolean).join(" ");
+}
+
+// Absolute send times for a burst around releaseMs, following API_SCHEDULE. Times already in the
+// past are dropped; if the burst is already underway, the first send is "now".
+function buildFireTimes(releaseMs, now = Date.now()) {
+  const intervalAt = (offset) => {
+    let every = API_SCHEDULE[0].every;
+    for (const row of API_SCHEDULE) if (offset >= row.from) every = row.every;
+    return every;
+  };
+  const times = [];
+  for (let off = API_SCHEDULE[0].from; off <= API_BURST_AFTER_MS; off += intervalAt(off)) {
+    if (releaseMs + off >= now) times.push(releaseMs + off);
+  }
+  if (now > releaseMs + API_SCHEDULE[0].from && now <= releaseMs + API_BURST_AFTER_MS) times.unshift(now);
+  return times;
+}
+
+// Wait until an absolute time with sub-ms precision: browsers clamp timers to ~4ms, so coarse
+// setTimeout first, then MessageChannel yields (not clamped) for the last stretch.
+const preciseChannel = new MessageChannel();
+const preciseWaiters = [];
+preciseChannel.port1.onmessage = () => preciseWaiters.shift()?.();
+const yieldPrecise = () => new Promise((r) => { preciseWaiters.push(r); preciseChannel.port2.postMessage(0); });
+// Timers can fire 10ms+ late on a busy page, so the coarse sleep stops 25ms short.
+async function waitUntil(t) {
+  while (Date.now() < t) {
+    const left = t - Date.now();
+    if (left > 30) await sleep(left - 25);
+    else await yieldPrecise();
+  }
 }
 
 function getConfig() {
@@ -216,7 +331,10 @@ async function run() {
   // FUTURE release time → countdown then fire
   const delay = releaseMs - RELOAD_LEAD_MS - nowMs();
   const releaseStr = new Date(config.releaseTime).toLocaleTimeString();
-  if (delay <= 0) {
+  const needsReload = (myTarget.mode || "api") === "dom";
+  // DOM only: too late to reload before release → click through right at release.
+  // API mode always goes through snipeApi, which follows its own schedule around release.
+  if (needsReload && delay <= 0) {
     const waitMs = Math.max(0, releaseMs - nowMs());
     setStatus(`⏰ Release in ${formatCountdown(waitMs)}`, "waiting");
     log(`Inside lead window; waiting ${formatCountdown(waitMs)} to snipe`);
@@ -228,8 +346,6 @@ async function run() {
     }, waitMs);
     return;
   }
-
-  const needsReload = (myTarget.mode || "api") === "dom";
 
   if (needsReload) {
     setStatus(`⏰ Reload at ${releaseStr}`, "waiting");
@@ -249,10 +365,11 @@ async function run() {
       location.reload();
     }, Math.max(0, delay));
   } else {
-    // API mode: burst every 25ms starting 100ms before release, stop at release time
-    const fireDelay = Math.max(0, releaseMs - API_EARLY_MS - nowMs());
+    // API mode: wake up shortly before the burst; snipeApi spins until the first
+    // API_SCHEDULE offset, then bursts offerings + lock requests around release.
+    const fireDelay = Math.max(0, releaseMs - API_SCHEDULE[0].from - 200 - nowMs());
     setStatus(`⏰ API fires at ${releaseStr}`, "waiting");
-    log(`Waiting ${formatCountdown(fireDelay)} — API burst starts ${API_EARLY_MS}ms before release`);
+    log(`Waiting ${formatCountdown(fireDelay)} — burst runs ${-API_SCHEDULE[0].from}ms before to ${API_BURST_AFTER_MS}ms after release, densest at release`);
 
     const countdownInterval = setInterval(() => {
       const remaining = releaseMs - nowMs();
@@ -274,10 +391,96 @@ async function snipe(config) {
   const mode = myTarget.mode || "api";
   if (mode === "api") {
     const success = await snipeApi(config);
-    if (!success) setStatus("⚠️ API failed — check manually", "error");
+    if (!success) {
+      const reason = JSON.parse(sessionStorage.getItem("tockLockResult") || "{}").summary || "check manually";
+      setStatus(`⚠️ API: ${reason}`, "error");
+      if (config.monitor?.enabled) await monitorLoop(config, reason);
+    }
     return;
   }
   await snipeDom(config);
+}
+
+// ─── Notifications (Telegram via background.js) ────────────────────────────
+
+const restaurantName = () => (document.title || "").split(" - ")[0].replace(/^[^\w\p{L}]+\s*/u, "").trim() || location.pathname.split("/")[1];
+const bookingLabel = (config) => `${restaurantName()} · ${targetLabel(myTarget)} · ${config.partySize || 2} guests`;
+// All API targets of this run (restaurant-level messages are sent once, so they list every target)
+const allTargetsLabel = (config) => {
+  const targets = (config.targets || []).filter((t) => (t.mode || "api") === "api").map(targetLabel);
+  return [...new Set(targets.length ? targets : [targetLabel(myTarget)])].join(", ");
+};
+
+// Never throws: a failed notification must not affect booking. `text` may be a function (built lazily).
+// `kind` ("monitoring" | "opened" | "ended") makes it once per restaurant per armed run (deduped in
+// background.js across tabs); omit it for per-target messages like a successful lock.
+function notify(text, kind = "") {
+  try {
+    if (typeof text === "function") text = text();
+    const dedupeKey = kind ? `${location.pathname.split("/")[1]}:${kind}` : undefined;
+    chrome.runtime.sendMessage({ type: "tockSniper:notify", text, dedupeKey }).then((r) => {
+      if (r && !r.ok && !r.skipped) log(`📨 Telegram failed: ${r.error}`, "error");
+    }, () => {});
+  } catch {}
+}
+
+// ─── Monitor ───────────────────────────────────────────────────────────────
+
+async function monitorLoop(config, lastReason = "") {
+  const m = config.monitor || {};
+  const intervalMs = Math.min(600, Math.max(10, m.intervalSec || 20)) * 1000;
+  const until = Date.now() + Math.min(48, Math.max(0.1, m.hours || 6)) * 3600e3;
+  const headers = getTockHeaders();
+  const partySize = config.partySize || 2;
+  const manualId = config.expSource === "auto" ? null : extractExperienceId(config);
+
+  log(`👀 Monitoring every ~${intervalMs / 1000}s until ${new Date(until).toLocaleTimeString()} — offerings only until bookings open`);
+  notify(`👀 Tock Sniper is monitoring ${restaurantName()} for ${partySize} guests\nTargets: ${allTargetsLabel(config)}\nLast attempt: ${lastReason || "no slot"}`, "monitoring");
+
+  let checks = 0;
+  let openNotified = false;
+  let lastMsg = "";
+  const note = (msg, type = "info") => { if (msg !== lastMsg) log(msg, type); lastMsg = msg; };
+
+  while (Date.now() < until) {
+    if (!(await chrome.storage.local.get("sniping")).sniping) {
+      log("⏹ Disarmed — monitoring stopped");
+      return;
+    }
+    checks++;
+    let wait = intervalMs * (0.8 + Math.random() * 0.4); // jitter
+    try {
+      const experiences = await fetchOfferings(headers);
+      if (!experiences.length) {
+        note("👀 Not open yet");
+        setStatus(`👀 Monitoring — not open yet (check ${checks})`, "waiting");
+      } else {
+        if (!openNotified) {
+          openNotified = true;
+          log(`🔓 Bookings open: ${formatExperiences(experiences)}`, "success");
+          notify(`🔓 Bookings just opened at ${restaurantName()}.\nTrying to lock: ${allTargetsLabel(config)} (${partySize} guests)…`, "opened");
+        }
+        const exp = pickExperience(experiences, partySize, manualId);
+        const ok = await snipeApi({ ...config, experienceId: exp.id, expSource: "manual", releaseTime: null, quiet: true });
+        if (ok) return;
+        const reason = JSON.parse(sessionStorage.getItem("tockLockResult") || "{}").summary || "no slot";
+        if (/429/.test(reason)) wait = MONITOR_429_BACKOFF_MS;
+        note(`👀 Open, but ${targetLabel(myTarget)}: ${reason}`);
+        setStatus(`👀 Monitoring — open, slot not available (check ${checks})`, "waiting");
+      }
+    } catch (err) {
+      if (err.status === 429) wait = MONITOR_429_BACKOFF_MS;
+      note(`👀 Check failed: ${err.message}`, "error");
+    }
+    if (wait === MONITOR_429_BACKOFF_MS) {
+      note(`⏸️ Rate limited — next check in ${MONITOR_429_BACKOFF_MS / 60000} min`, "error");
+      setStatus(`⏸️ Rate limited — waiting ${MONITOR_429_BACKOFF_MS / 60000} min`, "error");
+    }
+    await sleep(Math.max(0, Math.min(wait, until - Date.now())));
+  }
+  log("⏹ Monitoring window ended");
+  setStatus("⏹ Monitoring ended — nothing booked", "error");
+  notify(`⏹ Monitoring ended for ${restaurantName()} — nothing booked.\nTargets: ${allTargetsLabel(config)}`, "ended");
 }
 
 // ─── API Direct Snipe ───────────────────────────────────────────────────────
@@ -288,7 +491,7 @@ function extractTockMeta() {
   let businessId = null, businessGroupId = null;
   for (const s of scripts) {
     const text = s.textContent;
-    const bm = text.match(/"businessId"\s*:\s*(\d+)/);
+    const bm = text.match(/"businessId"\s*:\s*"?(\d+)"?/);
     const gm = text.match(/"businessGroupId"\s*:\s*"?(\d+)"?/);
     if (bm) businessId = bm[1];
     if (gm) businessGroupId = gm[1];
@@ -302,28 +505,56 @@ function extractTockMeta() {
   return { businessId, businessGroupId };
 }
 
-function getTockHeaders(config) {
-  const meta = extractTockMeta();
-  const scope = JSON.stringify({
-    businessId: meta.businessId || "",
-    businessGroupId: meta.businessGroupId || "",
-    site: "EXPLORETOCK",
-  });
-  // Session from cookie
-  const sessionMatch = document.cookie.match(/JSESSIONID=([^;]+)/);
-  const session = sessionMatch ? sessionMatch[1] : "";
-  // x-tock-session from page state (stored by Tock's JS)
-  const tockSession = sessionStorage.getItem("tock-session") ||
-    document.cookie.split(";").map(c => c.trim()).find(c => c.startsWith("tock_session="))?.split("=")[1] || "";
+let cachedBuildNumber = null;
+function getBuildNumber() {
+  if (cachedBuildNumber) return cachedBuildNumber;
+  const m = document.documentElement.outerHTML.match(/servingstack-20\d\d-\d\d-\d\dRC\d+-\d+/);
+  cachedBuildNumber = m ? m[0] : FALLBACK_BUILD_NUMBER;
+  return cachedBuildNumber;
+}
 
-  return {
+// Headers Tock's own frontend sent (session, auth JWT, CSRF, fingerprint…), recorded by page-hook.js
+function getCapturedTockHeaders() {
+  try {
+    return JSON.parse(document.documentElement.dataset.tockSniperHeaders || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function getFingerprint() {
+  try {
+    const raw = localStorage.getItem("fingerprint");
+    return raw ? JSON.parse(raw) : "";
+  } catch {
+    return "";
+  }
+}
+
+function getTockHeaders() {
+  const captured = getCapturedTockHeaders();
+  const meta = extractTockMeta();
+  const headers = {
+    "x-tock-scope": JSON.stringify({
+      businessId: meta.businessId || "",
+      businessGroupId: meta.businessGroupId || "",
+      site: "EXPLORETOCK",
+    }),
+    "x-tock-build-number": getBuildNumber(),
+    "x-tock-fingerprint": getFingerprint(),
+    ...captured,
     "accept": "application/octet-stream",
     "content-type": "application/octet-stream",
     "x-tock-stream-format": "proto2",
-    "x-tock-scope": scope,
-    "x-tock-path": new URL(location.href).pathname,
-    "x-tock-build-number": "2026-05-08RC12-00",
+    "x-tock-path": location.pathname,
   };
+  for (const k of Object.keys(headers)) if (!headers[k]) delete headers[k];
+  return headers;
+}
+
+function describeHeaders(headers) {
+  const has = (k) => (headers[k] ? "✓" : "✗");
+  return `session ${has("x-tock-session")} auth ${has("x-tock-authorization")} csrf ${has("x-tock-csrf-token")} fp ${has("x-tock-fingerprint")} build ${headers["x-tock-build-number"] || "?"}`;
 }
 
 function encodeVarint(value) {
@@ -393,6 +624,92 @@ function decodeProtoStrings(data) {
   return strings;
 }
 
+function decodeFields(data) {
+  // Shallow proto decode: { fieldNum: [value, ...] } (varints as numbers, length-delimited as bytes)
+  const fields = {};
+  let pos = 0;
+  while (pos < data.length) {
+    let tag;
+    [tag, pos] = decodeVarintFrom(data, pos);
+    const field = Math.floor(tag / 8), wireType = tag & 7;
+    let value;
+    if (wireType === 0) [value, pos] = decodeVarintFrom(data, pos);
+    else if (wireType === 2) {
+      let len;
+      [len, pos] = decodeVarintFrom(data, pos);
+      value = data.slice(pos, pos + len);
+      pos += len;
+    } else if (wireType === 5) { value = data.slice(pos, pos + 4); pos += 4; }
+    else if (wireType === 1) { value = data.slice(pos, pos + 8); pos += 8; }
+    else break;
+    (fields[field] ||= []).push(value);
+  }
+  return fields;
+}
+
+// POST /api/consumer/offerings
+// Request: ConsumerCalendarRequest (MessageSet ext 60331), empty.
+// Response: envelope f1 → f1 → ConsumerOfferings (ext 60249) → f1 repeated Offering
+//   Offering: f1 id (= experience ID), f3 name, f5 slug, f7 repeated partySize
+function buildOfferingsRequest() {
+  return new Uint8Array(encodeLengthDelimited(60331, []));
+}
+
+function parseOfferings(data) {
+  const text = (bytes) => (bytes ? new TextDecoder().decode(bytes) : "");
+  const outer = decodeFields(data)[1]?.[0];
+  const inner = outer && decodeFields(outer)[1]?.[0];
+  const offerings = inner && decodeFields(inner)[60249]?.[0];
+  if (!offerings) return null;
+  return (decodeFields(offerings)[1] || []).map((bytes) => {
+    const o = decodeFields(bytes);
+    return {
+      id: o[1]?.[0],
+      name: text(o[3]?.[0]),
+      slug: text(o[5]?.[0]),
+      partySizes: o[7] || [],
+    };
+  });
+}
+
+async function fetchOfferings(headers) {
+  const res = await fetch("/api/consumer/offerings", {
+    method: "POST",
+    headers,
+    body: buildOfferingsRequest(),
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!res.ok) throw Object.assign(new Error(`offerings HTTP ${res.status}`), { status: res.status });
+  const data = new Uint8Array(await res.arrayBuffer());
+  const err = parseTockError(data);
+  if (err) throw Object.assign(new Error(`offerings ${err.status} ${err.message}`), { status: err.status });
+  return parseOfferings(data) || [];
+}
+
+function pickExperience(experiences, partySize, preferredId) {
+  if (!experiences.length) return null;
+  const preferred = experiences.find((e) => e.id === preferredId);
+  if (preferred) return preferred;
+  const fits = (e) => !e.partySizes.length || e.partySizes.includes(partySize);
+  return experiences.find(fits) || experiences[0];
+}
+
+function formatExperiences(experiences) {
+  return experiences.map((e) => `${e.id} ${e.name} (${e.partySizes.join("/") || "?"}p)`).join("; ");
+}
+
+// Tock answers errors with HTTP 200 and a top-level f2 error message:
+//   f2 { f1 code (e.g. 2002 bad request, 3000 unavailable), f2 message, f5 http-like status (400/410/429…) }
+// Success responses carry f1 instead.
+function parseTockError(data) {
+  const err = decodeFields(data)[2]?.[0];
+  if (!err) return null;
+  const e = decodeFields(err);
+  const message = e[2]?.[0] ? decodeProtoStrings(err).join(" ") || "" : "";
+  return { code: e[1]?.[0] ?? 0, status: e[5]?.[0] ?? 0, message };
+}
+
 function summarizeLockResponse(data) {
   const strings = decodeProtoStrings(data);
   const parts = [];
@@ -451,12 +768,6 @@ function displayTimeToParam24(time) {
 }
 
 async function snipeApi(config) {
-  const experienceId = extractExperienceId(config);
-  if (!experienceId) {
-    log("❌ API: Can't find experience ID", "error");
-    return false;
-  }
-
   const partySize = config.partySize || 2;
   const timeParam = myTarget.timeParam || displayTimeToParam24(myTarget.time || "");
   if (!timeParam) {
@@ -464,19 +775,78 @@ async function snipeApi(config) {
     return false;
   }
   const datetime = `${myDate}T${timeParam}`;
-  const headers = getTockHeaders(config);
-  const body = buildLockRequest(partySize, datetime, experienceId);
+  const headers = getTockHeaders();
+  const say = config.quiet ? () => {} : log; // monitor attempts stay quiet except for results
+  say(`🔑 Headers: ${describeHeaders(headers)}`);
+  if (!headers["x-tock-session"]) log("⚠️ No x-tock-session captured — lock may be rejected", "error");
 
-  log(`🚀 API lock: ${datetime}, ${partySize} guests, exp ${experienceId}`);
-  log(`📦 Lock request: ${body.length} bytes`);
+  // Experience ID: manual value is the starting point; the offerings burst at release
+  // replaces it with whatever Tock actually lists.
+  // expSource: "hybrid" (manual ID + offerings correction), "manual" (no offerings), "auto" (offerings only)
+  const expSource = config.expSource || "hybrid";
+  const manualId = expSource === "auto" ? null : extractExperienceId(config);
+  if (expSource === "manual" && !manualId) {
+    log("❌ API: Manual ID mode but no experience ID", "error");
+    return false;
+  }
+  let experienceId = manualId;
+  let body = experienceId ? buildLockRequest(partySize, datetime, experienceId) : null;
+  say(`🚀 API lock: ${datetime}, ${partySize} guests, exp ${experienceId || "(waiting for offerings)"} [${expSource}]`);
 
-  // Burst: fire every 25ms starting 100ms before release, stop once release time passes.
-  // Mac local clock (NTP) is accurate to ~10-50ms — no server clock sync needed.
+  // Burst: concurrent offerings + lock requests following API_SCHEDULE around the release time,
+  // until API_BURST_AFTER_MS after it. First lock success wins. Stops early on sold-out
+  // (410 streak after release) or rate limiting (429). Local clock (NTP).
   const releaseMs = config.releaseTime ? new Date(config.releaseTime).getTime() : Date.now();
+  const endMs = releaseMs + API_BURST_AFTER_MS;
+  // Started after the burst window (tab opened late, or no release time): one attempt, no burst
+  const singleShot = Date.now() > endMs || !config.releaseTime;
 
   let attempt = 0;
-  while (Date.now() <= releaseMs) {
-    attempt++;
+  let done = false;
+
+  const useExperience = (exp, source) => {
+    if (!exp || exp.id === experienceId) return;
+    experienceId = exp.id;
+    body = buildLockRequest(partySize, datetime, experienceId);
+    log(`🎟️ Experience from ${source}: ${exp.id} ${exp.name}`, "success");
+  };
+
+  let resolveWin;
+  const won = new Promise((r) => { resolveWin = r; });
+  let stopReason = "";
+  const stop = (reason) => {
+    if (done) return;
+    done = true;
+    stopReason = reason;
+    resolveWin(false);
+  };
+
+  // Request accounting: shown live in the status bar and summarized at the end
+  const startedAt = Date.now();
+  const stats = { lockSent: 0, offeringsSent: 0, byStatus: {} };
+  const countStatus = (key) => { stats.byStatus[key] = (stats.byStatus[key] || 0) + 1; };
+  const statsLine = () => {
+    const parts = Object.entries(stats.byStatus).map(([k, v]) => `${k}×${v}`).join(" ");
+    const offers = stats.offeringsSent ? `, ${stats.offeringsSent} offerings` : "";
+    return `${stats.lockSent} lock${offers}${parts ? ` → ${parts}` : ""}`;
+  };
+  const showProgress = () => { if (!done) setStatus(`🎯 Sniping… ${statsLine()}`, "running"); };
+
+  let count429 = 0;
+  const on429 = () => {
+    if (++count429 < API_MAX_429 || done) return false;
+    say(`⚠️ Rate limited (429) — stopping`, "error");
+    stop("rate limited (429)");
+    return true;
+  };
+
+  let soldOutStreak = 0;
+
+  let lastLockMsg = "";
+  const fireOne = async (n) => {
+    if (!body) return; // no experience ID yet
+    const sentAt = Date.now();
+    stats.lockSent++;
     try {
       const res = await fetch("/api/ticket/group/lock", {
         method: "PUT",
@@ -484,42 +854,137 @@ async function snipeApi(config) {
         body,
         credentials: "include",
       });
+      if (done) return;
+      const resData = new Uint8Array(await res.arrayBuffer().catch(() => new ArrayBuffer(0)));
+      const tockErr = res.ok ? parseTockError(resData) : null;
+      if (done) return;
 
-      if (res.ok) {
-        const resData = new Uint8Array(await res.arrayBuffer());
+      if (res.ok && !tockErr) {
+        done = true;
+        resolveWin(true); // first: nothing below may keep the caller waiting
         const summary = summarizeLockResponse(resData);
-        log(`✅ API lock success! Attempt ${attempt}: ${summary}`, "success");
+        log(`✅ API lock success! Attempt ${n}: ${summary}`, "success");
         setStatus("🛒 Slot locked! Loading checkout...", "success");
-        sessionStorage.setItem("tockLockResult", JSON.stringify({ ok: true, attempt, summary }));
+        sessionStorage.setItem("tockLockResult", JSON.stringify({ ok: true, attempt: n, summary }));
         const bizSlug = location.pathname.split("/")[1];
+        notify(() => `🎉 Locked ${bookingLabel(config)}!\nComplete checkout within ~10 min in the browser.\n${location.origin}/${bizSlug}`);
         location.href = `/${bizSlug}/checkout/confirm-purchase`;
-        await sleep(5000);
-        return true;
+        return;
       }
 
-      const status = res.status;
-      const resBody = new Uint8Array(await res.arrayBuffer().catch(() => new ArrayBuffer(0)));
-      const summary = resBody.length ? summarizeLockResponse(resBody) : "";
-      if (status === 429) {
-        log(`⚠️ Rate limited on attempt ${attempt}, stopping`, "error");
-        break;
+      const status = tockErr ? tockErr.status : res.status;
+      countStatus(status);
+      showProgress();
+      if (status === 429 && on429()) return;
+      // 410 is expected right at release (slots not open yet); only trust it well after release
+      if (status === 410 && sentAt >= releaseMs + SOLD_OUT_GRACE_MS) {
+        if (++soldOutStreak >= SOLD_OUT_STREAK) {
+          log(`🈵 Sold out — ${soldOutStreak} consecutive 410s after release: ${tockErr?.message || ""}`, "error");
+          stop("sold out (410)");
+          return;
+        }
+      } else if (status !== 410) {
+        soldOutStreak = 0;
       }
-      log(`⏳ Attempt ${attempt}: HTTP ${status} ${summary}`);
+      // Log only when the failure changes, so a 300-request burst doesn't flood the overlay
+      const msg = tockErr ? `${tockErr.status} ${tockErr.message}` : `HTTP ${res.status}`;
+      if (msg !== lastLockMsg) say(`⏳ #${n}: ${msg}`);
+      lastLockMsg = msg;
     } catch (err) {
-      log(`⏳ Attempt ${attempt}: ${err.message}`);
+      countStatus("err");
+      if (!done) say(`⏳ #${n}: ${err.message}`);
     }
+  };
 
-    await sleep(API_BURST_INTERVAL_MS);
+  // Offerings burst (same cadence as lock): stops at the first non-empty experience list.
+  let offeringsFound = expSource === "manual"; // manual: never query offerings
+  let lastOfferingsMsg = "";
+  const fireOfferings = async () => {
+    stats.offeringsSent++;
+    try {
+      const experiences = await fetchOfferings(headers);
+      if (done || offeringsFound) return;
+      if (!experiences.length) {
+        if (lastOfferingsMsg !== "empty") log("📋 Offerings: none listed yet");
+        lastOfferingsMsg = "empty";
+        return;
+      }
+      offeringsFound = true;
+      log(`📋 Offerings: ${formatExperiences(experiences)}`);
+      useExperience(pickExperience(experiences, partySize, manualId), "offerings");
+    } catch (err) {
+      if (done || offeringsFound) return;
+      if (err.status === 429 && on429()) return;
+      if (err.message !== lastOfferingsMsg) log(`📋 ${err.message}`);
+      lastOfferingsMsg = err.message;
+    }
+  };
+
+  if (singleShot) {
+    say("⏱️ Past the release window — single attempt, no burst");
+    if (!offeringsFound) await fireOfferings();
+    if (body) await fireOne(++attempt);
+    stop(body ? "single attempt" : "no experience ID");
+  } else {
+    // Send at precomputed absolute times: densest around release (see API_SCHEDULE)
+    const fireTimes = buildFireTimes(releaseMs);
+    log(`🗓️ ${fireTimes.length} sends planned, ${-API_SCHEDULE[0].from}ms before to ${API_BURST_AFTER_MS}ms after release`);
+    let lastOfferingsAt = -Infinity;
+    for (const t of fireTimes) {
+      await waitUntil(t);
+      if (done) break;
+      // Offerings counts against the same rate limit, so it doesn't need the lock's density
+      if (!offeringsFound && Date.now() - lastOfferingsAt >= OFFERINGS_MIN_GAP_MS) {
+        lastOfferingsAt = Date.now();
+        fireOfferings();
+      }
+      if (body) fireOne(++attempt);
+    }
+    // Let in-flight responses land (a success may still arrive), then give up
+    if (!done) await Promise.race([won, sleep(2000)]);
+    stop("time window ended");
   }
 
-  log("❌ API lock failed after all attempts", "error");
-  sessionStorage.setItem("tockLockResult", JSON.stringify({ ok: false, summary: "All attempts failed" }));
+  const ok = await won;
+  say(`📊 Sent ${statsLine()} in ${Date.now() - startedAt}ms${stopReason ? ` — stopped: ${stopReason}` : ""}`);
+  if (ok) {
+    await sleep(5000);
+    return true;
+  }
+
+  const failure = !experienceId ? "No experience ID — offerings never listed one"
+    : stopReason === "time window ended" ? "API lock failed after all attempts"
+    : stopReason === "single attempt" ? `Single attempt failed (${Object.keys(stats.byStatus).join(", ") || "no response"})`
+    : `Stopped: ${stopReason}`;
+  say(`❌ ${failure}`, "error");
+  sessionStorage.setItem("tockLockResult", JSON.stringify({ ok: false, summary: failure }));
   return false;
 }
 
 // ─── DOM Click Snipe (original method) ──────────────────────────────────────
 
+// Reload (or switch to the /search URL) and try again, if still within the retry budget/window.
+function domRetry(config, reason) {
+  const releaseMs = config.releaseTime ? new Date(config.releaseTime).getTime() : 0;
+  const retries = parseInt(sessionStorage.getItem("tockDomRetries") || "0", 10);
+  if (!releaseMs || Date.now() > releaseMs + DOM_RETRY_WINDOW_MS || retries >= DOM_MAX_RETRIES) return false;
+  sessionStorage.setItem("tockDomRetries", String(retries + 1));
+  // Experience URL with an unknown/stale ID → fall back to the restaurant's /search URL
+  const toSearch = /couldn't find/i.test(reason) && myTarget.searchUrl && !location.pathname.endsWith("/search");
+  log(`🔁 Retry ${retries + 1}/${DOM_MAX_RETRIES}: ${reason} — ${toSearch ? "switching to /search" : "reloading"}`, "error");
+  setStatus(`🔁 Retry ${retries + 1}/${DOM_MAX_RETRIES}…`, "running");
+  if (toSearch) location.href = myTarget.searchUrl;
+  else location.reload();
+  return true;
+}
+
 async function snipeDom(config) {
+  const fail = (status, message) => {
+    if (domRetry(config, message)) return;
+    setStatus(status, "error");
+    log(message, "error");
+  };
+
   // Step 1: Wait for dialog — if URL has date/time params, Tock auto-opens it
   // Only click "Book now" as fallback if dialog doesn't appear
   let dialog = null;
@@ -541,11 +1006,7 @@ async function snipeDom(config) {
       if (bookLink) break;
       await sleep(50);
     }
-    if (!bookLink) {
-      setStatus("❌ No slots found", "error");
-      log("No 'Book now' link after 15s", "error");
-      return;
-    }
+    if (!bookLink) return fail("❌ No slots found", "No 'Book now' link after 15s");
     log("🎉 Clicking Book now...");
     bookLink.click();
 
@@ -555,7 +1016,7 @@ async function snipeDom(config) {
       if (dialog) break;
       await sleep(50);
     }
-    if (!dialog) { setStatus("❌ Dialog failed", "error"); log("Dialog didn't open", "error"); return; }
+    if (!dialog) return fail("❌ Dialog failed", "Dialog didn't open");
     log("📋 Dialog opened");
     await sleep(myTarget.hasUrlDate ? 100 : 500);
   } else {
@@ -569,12 +1030,11 @@ async function snipeDom(config) {
     let dateFound = false;
     const dateDeadline = Date.now() + 10000;
     while (Date.now() < dateDeadline) {
-      const dateBtn = dialog.querySelector(`button[aria-label="${myDate}"]`);
+      // aria-label is "YYYY-MM-DD" or "YYYY-MM-DD, no availability"
+      const dateBtn = dialog.querySelector(`button[aria-label^="${myDate}"]`);
       if (dateBtn) {
-        if (dateBtn.disabled) {
-          setStatus(`❌ ${myDate} sold out`, "error");
-          log(`${myDate} is disabled/sold out`, "error");
-          return;
+        if (dateBtn.disabled || /no availability/i.test(dateBtn.getAttribute("aria-label"))) {
+          return fail(`❌ ${myDate} sold out`, `${myDate} is disabled/sold out`);
         }
         log(`📅 Clicking date: ${myDate}`);
         dateBtn.click();
@@ -590,28 +1050,28 @@ async function snipeDom(config) {
         await sleep(300);
       }
     }
-    if (!dateFound) {
-      setStatus("❌ Date not found", "error");
-      log(`Could not find ${myDate} on calendar`, "error");
-      return;
-    }
+    if (!dateFound) return fail("❌ Date not found", `Could not find ${myDate} on calendar`);
   }
 
-  // Step 4: Wait for time slots
+  // Step 4: Wait for time slots. Bail out early (→ retry) when Tock says the date is sold out or
+  // the experience can't be found, instead of waiting out the full 10s.
+  // The signal must hold for 250ms so a dialog still loading its data isn't mistaken for sold out.
   let bookBtns = [];
+  let unavailableSince = 0;
   const slotDeadline = Date.now() + 10000;
   while (Date.now() < slotDeadline) {
     bookBtns = [...dialog.querySelectorAll("button")].filter(
       (b) => b.textContent.trim() === "Book" && !b.disabled
     );
     if (bookBtns.length > 0) break;
-    await sleep(300);
+    const unavailable = dialog.innerText.match(DOM_UNAVAILABLE_TEXT)?.[0]
+      || (/no availability/i.test(dialog.querySelector(`button[aria-label^="${myDate}"]`)?.getAttribute("aria-label") || "") && `${myDate}: no availability`);
+    if (!unavailable) unavailableSince = 0;
+    else if (!unavailableSince) unavailableSince = Date.now();
+    else if (Date.now() - unavailableSince >= 250) return fail("❌ No availability", `Tock: "${unavailable}"`);
+    await sleep(50);
   }
-  if (bookBtns.length === 0) {
-    setStatus("❌ No time slots", "error");
-    log("No available time slots", "error");
-    return;
-  }
+  if (bookBtns.length === 0) return fail("❌ No time slots", "No available time slots");
 
   // Step 5: Adjust party size
   const guestP = [...dialog.querySelectorAll("p")].find((p) => /\d+\s*guest/.test(p.textContent));
@@ -620,7 +1080,8 @@ async function snipeDom(config) {
     const target = config.partySize || 2;
     if (current !== target) {
       log(`👥 ${current} → ${target} guests`);
-      const btn = dialog.querySelector(`button[aria-label="${current < target ? "More" : "Fewer"} guests"]`);
+      // aria-label is e.g. "More guests, current party size is 2"
+      const btn = dialog.querySelector(`button[aria-label^="${current < target ? "More" : "Fewer"} guests"]`);
       if (btn) {
         for (let i = 0; i < Math.abs(target - current); i++) { btn.click(); await sleep(150); }
         await sleep(300);
@@ -667,10 +1128,83 @@ async function snipeDom(config) {
     document.title = `✅ ${targetLabel(myTarget)} ${chosen.time} — CHECKOUT`;
     setStatus(`🛒 GOT IT! ${chosen.time} — CHECKOUT`, "success");
     log(`🛒 Got ${chosen.time}! Complete checkout now.`, "success");
+    notify(() => `🎉 Reached checkout: ${restaurantName()} · ${myDate} ${chosen.time} · ${config.partySize || 2} guests\nComplete payment in the browser.`);
   } else {
     setStatus("⚠️ Check manually", "error");
     log("Didn't reach checkout — check manually", "error");
   }
 }
+
+
+// ─── Popup "Use this page" support ──────────────────────────────────────────
+
+// Release-time text on the page, two kinds:
+// 1. Tock's own: "New reservations will be released on October 3, 2026 at 3:00 AM UTC." — rendered in
+//    the browser's time zone (with its abbreviation).
+// 2. Written by the restaurant, e.g. "Reservations for November 2026 will be released on Thursday,
+//    October 15, 2026 at 10am." — no zone; presumably the restaurant's local time, which we guess
+//    from the US state in the page title ("Lazy Bear - San Francisco, CA | Tock").
+// The popup converts either to a datetime-local value.
+const US_STATE_ZONES = {
+  "America/Los_Angeles": ["CA", "WA", "OR", "NV"],
+  "America/Phoenix": ["AZ"],
+  "America/Denver": ["CO", "UT", "NM", "MT", "WY", "ID"],
+  "America/Chicago": ["TX", "IL", "MN", "WI", "MO", "LA", "OK", "KS", "NE", "IA", "AR", "MS", "AL", "TN", "SD", "ND"],
+  "America/New_York": ["NY", "NJ", "PA", "MA", "CT", "RI", "VT", "NH", "ME", "DE", "MD", "DC", "VA", "WV", "NC", "SC", "GA", "FL", "OH", "MI", "IN", "KY"],
+  "America/Anchorage": ["AK"],
+  "Pacific/Honolulu": ["HI"],
+};
+
+function guessRestaurantZone() {
+  const state = document.title.match(/,\s*([A-Z]{2})\s*\|\s*Tock\s*$/)?.[1];
+  const zone = Object.entries(US_STATE_ZONES).find(([, states]) => states.includes(state))?.[0] || null;
+  return { state: state || null, zone };
+}
+
+function detectRelease() {
+  const text = document.body?.innerText || "";
+  const tock = text.match(/New reservations will be released on ([A-Z][a-z]+ \d{1,2}, \d{4}) at (\d{1,2}:\d{2}\s*[AP]M)(?:\s+([A-Z]{2,5}))?/);
+  if (tock) return { text: tock[0], date: tock[1], time: tock[2], tz: tock[3] || "", source: "tock" };
+  const custom = text.match(/will be released on (?:[A-Z][a-z]+day,?\s+)?([A-Z][a-z]+ \d{1,2},? \d{4}),? at (\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?/i);
+  if (!custom) return null;
+  const time = `${custom[2]}:${custom[3] || "00"} ${custom[4].toUpperCase()}M`;
+  return { text: custom[0], date: custom[1], time, tz: "", source: "restaurant", ...guessRestaurantZone() };
+}
+
+function detectExperiencesFromDom() {
+  const found = new Map();
+  for (const a of document.querySelectorAll('a[href*="/experience/"]')) {
+    const m = a.getAttribute("href").match(/\/experience\/(\d+)(?:\/([^/?#]+))?/);
+    if (!m) continue;
+    const id = parseInt(m[1], 10);
+    if (!found.has(id)) found.set(id, { id, name: (m[2] || "").replace(/-/g, " "), partySizes: [] });
+  }
+  return [...found.values()];
+}
+
+async function getPageInfo() {
+  const experiences = new Map(detectExperiencesFromDom().map((e) => [e.id, e]));
+  let offeringsError = null;
+  try {
+    // Offerings has the real names and party sizes, and lists experiences the page doesn't link
+    for (const e of await fetchOfferings(getTockHeaders())) experiences.set(e.id, e);
+  } catch (err) {
+    offeringsError = err.message;
+  }
+  const pathMatch = location.pathname.match(/\/experience\/(\d+)/);
+  return {
+    url: location.href,
+    currentExperienceId: pathMatch ? parseInt(pathMatch[1], 10) : null,
+    experiences: [...experiences.values()],
+    release: detectRelease(),
+    offeringsError,
+  };
+}
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type !== "tockSniper:pageInfo") return;
+  getPageInfo().then(sendResponse, (err) => sendResponse({ error: err.message }));
+  return true; // async response
+});
 
 run();

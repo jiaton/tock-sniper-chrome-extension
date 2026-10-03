@@ -3,66 +3,219 @@
 <head>
 <meta charset="utf-8">
 <style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #111827; --muted: #6b7280; --border: #e5e7eb;
+    --input: #ffffff; --accent: #2563eb; --accent-hover: #1d4ed8; --accent-soft: #eff6ff;
+    --danger: #dc2626; --danger-hover: #b91c1c; --chip: #eef2ff; --chip-text: #3730a3;
+    --ok: #16a34a; --warn-bg: #fefce8; --warn-text: #854d0e; --info-bg: #eff6ff; --info-text: #1e40af;
+    --success-bg: #f0fdf4; --success-text: #166534;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --card: #181b22; --text: #e5e7eb; --muted: #9ca3af; --border: #2a2f3a;
+      --input: #11141a; --accent: #3b82f6; --accent-hover: #2563eb; --accent-soft: #1e293b;
+      --danger: #ef4444; --danger-hover: #dc2626; --chip: #1e2540; --chip-text: #c7d2fe;
+      --ok: #22c55e; --warn-bg: #2a2410; --warn-text: #fde68a; --info-bg: #172036; --info-text: #bfdbfe;
+      --success-bg: #10251a; --success-text: #bbf7d0;
+    }
+  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { width: 340px; font: 13px/1.5 -apple-system, sans-serif; padding: 12px; color: #1a1a1a; }
-  h2 { font-size: 15px; margin-bottom: 4px; }
-  .desc { font-size: 11px; color: #888; margin-bottom: 8px; }
-  label { display: block; font-weight: 600; margin-top: 8px; font-size: 12px; color: #555; }
-  input { width: 100%; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; margin-top: 2px; }
-  .slot { background: #f8f8f8; border: 1px solid #e5e5e5; border-radius: 6px; padding: 8px; margin-top: 8px; }
-  .slot-header { font-weight: 600; font-size: 12px; color: #333; margin-bottom: 4px; }
-  .row { display: flex; gap: 8px; }
-  .row > div { flex: 1; }
-  button { width: 100%; padding: 10px; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 12px; }
-  #startBtn { background: #2563eb; color: #fff; }
-  #startBtn:hover { background: #1d4ed8; }
-  #startBtn.active { background: #dc2626; }
-  #status { margin-top: 8px; padding: 6px 8px; border-radius: 4px; font-size: 12px; display: none; }
-  #status.info { display: block; background: #eff6ff; color: #1e40af; }
-  #status.success { display: block; background: #f0fdf4; color: #166534; }
-  #status.warn { display: block; background: #fefce8; color: #854d0e; }
-  small { color: #888; font-size: 11px; display: block; margin-top: 1px; }
-  .add-btn { background: #f3f4f6; color: #333; border: 1px dashed #ccc; font-size: 12px; padding: 6px; margin-top: 8px; }
-  .add-btn:hover { background: #e5e7eb; }
-  .remove-btn { background: none; border: none; color: #999; cursor: pointer; font-size: 14px; padding: 0 4px; width: auto; margin: 0; }
-  .remove-btn:hover { color: #dc2626; }
+  body { width: 360px; background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 12px; }
+
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  header h1 { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+  header .sub { font-size: 11px; color: var(--muted); }
+  #saved { font-size: 11px; color: var(--ok); opacity: 0; transition: opacity .2s; }
+  #saved.show { opacity: 1; }
+
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+  .card-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 6px; }
+
+  .field-label { display: block; font-size: 12px; font-weight: 600; margin: 9px 0 3px; }
+  .card-title + .field-label { margin-top: 0; }
+  small { display: block; font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+  input[type=text], input[type=password], input[type=number], input[type=datetime-local], input[type=date], input[type=time] {
+    width: 100%; height: 32px; padding: 0 9px; background: var(--input); color: var(--text);
+    border: 1px solid var(--border); border-radius: 7px; font: inherit; outline: none; transition: border-color .15s, box-shadow .15s;
+  }
+  input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+  input::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .7; }
+  @media (prefers-color-scheme: dark) { input::-webkit-calendar-picker-indicator { filter: invert(1); } }
+
+  /* Stepper */
+  .stepper { display: flex; height: 32px; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; background: var(--input); }
+  .stepper button { width: 32px; flex: none; border: none; background: transparent; color: var(--text); font-size: 16px; cursor: pointer; }
+  .stepper button:hover { background: var(--accent-soft); }
+  .stepper input { border: none; border-radius: 0; text-align: center; height: 100%; padding: 0; -moz-appearance: textfield; }
+  .stepper input:focus { box-shadow: none; }
+  .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; }
+
+  /* Segmented control */
+  .seg { display: flex; padding: 2px; gap: 2px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; }
+  .seg label { flex: 1; }
+  .seg input { display: none; }
+  .seg span { display: block; text-align: center; padding: 5px 4px; border-radius: 6px; font-size: 12px; font-weight: 500; color: var(--muted); cursor: pointer; transition: background .15s, color .15s; white-space: nowrap; }
+  .seg input:checked + span { background: var(--card); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+
+  /* Chip pickers */
+  .picker { display: flex; gap: 6px; }
+  .picker input { flex: 1; }
+  .picker button { height: 32px; padding: 0 12px; border: 1px solid var(--border); background: var(--accent-soft); color: var(--accent); border-radius: 7px; font: inherit; font-weight: 600; cursor: pointer; }
+  .picker button:hover { border-color: var(--accent); }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; min-height: 24px; }
+  .chip { display: inline-flex; align-items: center; gap: 2px; height: 24px; padding: 0 3px 0 9px; background: var(--chip); color: var(--chip-text); border-radius: 999px; font-size: 12px; font-weight: 500; }
+  .chip button { width: 18px; height: 18px; border: none; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; font-size: 11px; line-height: 18px; opacity: .7; }
+  .chip button:hover { opacity: 1; background: color-mix(in srgb, currentColor 15%, transparent); }
+  .chips .empty { font-size: 11px; color: var(--muted); align-self: center; }
+
+  /* Detected-from-page suggestions */
+  .chip.pick { cursor: pointer; padding-right: 9px; border: 1px solid transparent; background: var(--accent-soft); color: var(--text); }
+  .chip.pick:hover { border-color: var(--accent); }
+  .chip.pick.selected { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .chip.pick .meta { color: var(--muted); font-weight: 400; margin-left: 4px; }
+  .suggest { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 7px 9px; border-radius: 7px; background: var(--info-bg); color: var(--info-text); font-size: 12px; }
+  .suggest .text { flex: 1; min-width: 0; }
+  .suggest .src { display: block; font-size: 11px; opacity: .75; }
+  .suggest button, #useTab { height: 26px; padding: 0 10px; border: none; border-radius: 6px; background: var(--accent); color: #fff; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  #useTab { height: 32px; }
+  .suggest button:hover, #useTab:hover { background: var(--accent-hover); }
+  .suggest.done { background: var(--success-bg); color: var(--success-text); }
+  [hidden] { display: none !important; }
+
+  /* Collapsible extras */
+  details.card { padding: 0; }
+  details.card > summary { list-style: none; cursor: pointer; padding: 10px 12px; display: flex; justify-content: space-between; align-items: center; margin: 0; }
+  details.card > summary::-webkit-details-marker { display: none; }
+  details.card > summary::after { content: "▸"; color: var(--muted); transition: transform .15s; }
+  details.card[open] > summary::after { transform: rotate(90deg); }
+  details.card .extras-body { padding: 0 12px 10px; }
+  .badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); text-transform: none; letter-spacing: 0; margin-left: 6px; }
+  .check { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; margin: 9px 0 3px; cursor: pointer; }
+  .check input { width: 14px; height: 14px; accent-color: var(--accent); }
+  .sub-fields { padding-left: 21px; }
+  .sub-fields[aria-disabled="true"] { opacity: .5; pointer-events: none; }
+  .pair { display: flex; gap: 8px; }
+  .pair > div { flex: 1; min-width: 0; }
+  .mini-label { display: block; font-size: 11px; color: var(--muted); margin: 6px 0 2px; }
+  #tgTest { height: 28px; margin-top: 8px; padding: 0 12px; border: 1px solid var(--border); background: var(--accent-soft); color: var(--accent); border-radius: 7px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+  #tgTestResult.ok { color: var(--ok); }
+  #tgTestResult.err { color: var(--danger); }
+
+  #startBtn { width: 100%; height: 40px; margin-top: 4px; border: none; border-radius: 9px; background: var(--accent); color: #fff; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; transition: background .15s; }
+  #startBtn:hover { background: var(--accent-hover); }
+  #startBtn.active { background: var(--danger); }
+  #startBtn.active:hover { background: var(--danger-hover); }
+  #tabSummary { text-align: center; font-size: 11px; color: var(--muted); margin-top: 5px; }
+
+  #status { margin-top: 8px; padding: 7px 10px; border-radius: 7px; font-size: 12px; display: none; }
+  #status.info { display: block; background: var(--info-bg); color: var(--info-text); }
+  #status.success { display: block; background: var(--success-bg); color: var(--success-text); }
+  #status.warn { display: block; background: var(--warn-bg); color: var(--warn-text); }
 </style>
 </head>
 <body>
-  <h2>🎯 Tock Sniper</h2>
-  <div class="desc">Auto-grab Tock reservations the instant they drop.</div>
+  <header>
+    <div>
+      <h1>🎯 Tock Sniper</h1>
+      <div class="sub">Auto-grab Tock reservations the instant they drop.</div>
+    </div>
+    <span id="saved">Saved ✓</span>
+  </header>
 
-  <label>Restaurant URL</label>
-  <input id="url" placeholder="https://www.exploretock.com/your-restaurant" />
-  <small>URLs with date, size, and time are used directly.</small>
+  <section class="card">
+    <div class="card-title">Restaurant</div>
+    <label class="field-label" for="url">Tock URL</label>
+    <div class="picker">
+      <input id="url" type="text" placeholder="https://www.exploretock.com/your-restaurant" />
+      <button type="button" id="useTab" hidden title="Fill in the Tock page open in this tab">Use this page</button>
+    </div>
+    <small id="urlHint">Date, size and time in the URL are picked up automatically.</small>
 
-  <label>Experience ID</label>
-  <input id="experienceId" type="number" placeholder="Auto-detected from URL" />
-  <small id="expIdHint">Parsed from /experience/&lt;id&gt;/ in the URL. Editable if needed.</small>
+    <label class="field-label" for="experienceId">Experience ID</label>
+    <input id="experienceId" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="e.g. 559289 — or parsed from /experience/<id>/" />
+    <div class="chips" id="expSuggestions" hidden></div>
 
-  <label>Party Size</label>
-  <input id="partySize" type="number" min="1" max="20" value="2" />
+    <span class="field-label">ID source</span>
+    <div class="seg">
+      <label><input type="radio" name="expSource" value="hybrid" checked><span>Manual + auto</span></label>
+      <label><input type="radio" name="expSource" value="manual"><span>Manual only</span></label>
+      <label><input type="radio" name="expSource" value="auto"><span>Auto only</span></label>
+    </div>
+    <small id="expSourceHint"></small>
+  </section>
 
-  <label>Release Time</label>
-  <input id="releaseTime" type="datetime-local" step="1" />
-  <small>Uses an exploretock.com server clock estimate when available.</small>
+  <section class="card">
+    <div class="card-title">Booking</div>
+    <label class="field-label" for="partySize">Party size</label>
+    <div class="stepper" style="width:112px">
+      <button type="button" id="partyMinus" aria-label="Fewer guests">−</button>
+      <input id="partySize" type="number" min="1" max="20" value="2" />
+      <button type="button" id="partyPlus" aria-label="More guests">+</button>
+    </div>
+    <label class="field-label" for="releaseTime">Release time</label>
+    <input id="releaseTime" type="datetime-local" step="1" />
+    <small>Local clock (NTP-synced). Tabs fire 10ms before this.</small>
+    <div class="suggest" id="releaseSuggest" hidden>
+      <span class="text"><span id="releaseSuggestTime"></span><span class="src" id="releaseSuggestSrc"></span></span>
+      <button type="button" id="releasePrefill">Prefill</button>
+    </div>
+  </section>
 
-  <label>Target Times</label>
-  <input id="prefTimes" placeholder="e.g. 5:00 PM, 8:00 PM" />
-  <small>Opens one tab for every date/time pair.</small>
+  <section class="card">
+    <div class="card-title">Targets</div>
+    <label class="field-label" for="dateInput">Dates</label>
+    <div class="picker">
+      <input id="dateInput" type="date" />
+      <button type="button" id="addDate">Add</button>
+    </div>
+    <div class="chips" id="dateChips"></div>
 
-  <label>Snipe Mode</label>
-  <select id="snipeMode" style="width:100%;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;margin-top:2px;">
-    <option value="api">⚡ API Direct (fastest — locks slot via HTTP)</option>
-    <option value="dom">🖱️ DOM Click (fallback — clicks through UI)</option>
-    <option value="both">🔥 Both (API first, DOM fallback)</option>
-  </select>
-  <small>API mode sends the lock request instantly at release time.</small>
+    <label class="field-label" for="timeInput">Times</label>
+    <div class="picker">
+      <input id="timeInput" type="time" step="900" value="19:00" />
+      <button type="button" id="addTime">Add</button>
+    </div>
+    <div class="chips" id="timeChips"></div>
+    <small>One tab per date × time.</small>
+  </section>
 
-  <div id="slots"></div>
-  <button class="add-btn" id="addSlot">+ Add Date</button>
+  <section class="card">
+    <div class="card-title">Mode</div>
+    <div class="seg">
+      <label><input type="radio" name="snipeMode" value="api" checked><span>⚡ API</span></label>
+      <label><input type="radio" name="snipeMode" value="dom"><span>🖱️ DOM</span></label>
+      <label><input type="radio" name="snipeMode" value="both"><span>🔥 Both</span></label>
+    </div>
+    <small id="snipeModeHint"></small>
+  </section>
 
-  <button id="startBtn">⚡ Arm Sniper (opens 3 tabs)</button>
+  <details class="card" id="extras">
+    <summary class="card-title">Monitor &amp; notifications <span class="badge" id="extrasBadge">off</span></summary>
+    <div class="extras-body">
+      <label class="check"><input type="checkbox" id="monitorEnabled"> Keep monitoring if nothing gets booked</label>
+      <div class="sub-fields" id="monitorFields">
+        <div class="pair">
+          <div><span class="mini-label">Check every (s)</span><input id="monitorInterval" type="number" min="10" max="600" value="20" /></div>
+          <div><span class="mini-label">Stop after (h)</span><input id="monitorHours" type="number" min="0.1" max="48" step="0.5" value="6" /></div>
+        </div>
+        <small>API tabs only. Polls the experience list (1 request/check); tries a lock only once bookings open. Waits 10 min after a 429. Stops on Disarm.</small>
+      </div>
+
+      <label class="check"><input type="checkbox" id="tgEnabled"> Telegram notifications</label>
+      <div class="sub-fields" id="tgFields">
+        <span class="mini-label">Bot token</span>
+        <input id="tgToken" type="password" autocomplete="off" spellcheck="false" placeholder="123456789:AA…" />
+        <span class="mini-label">Chat ID</span>
+        <input id="tgChatId" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="e.g. 123456789" />
+        <button type="button" id="tgTest">Send test</button> <small id="tgTestResult"></small>
+        <small>Sent when a slot is locked, bookings open, or monitoring ends. Stored only in this browser.</small>
+      </div>
+    </div>
+  </details>
+
+  <button id="startBtn">⚡ Arm Sniper</button>
+  <div id="tabSummary"></div>
   <div id="status"></div>
 
 <script src="popup.js"></script>

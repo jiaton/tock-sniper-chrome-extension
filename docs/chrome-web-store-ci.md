@@ -41,10 +41,10 @@ Use the Google account that owns the store item.
    don't paste them anywhere else):
 
    ```bash
-   gh secret set CWS_CLIENT_ID --repo jiaton/tock-sniper-ext
-   gh secret set CWS_CLIENT_SECRET --repo jiaton/tock-sniper-ext
-   gh secret set CWS_REFRESH_TOKEN --repo jiaton/tock-sniper-ext
-   gh secret set CWS_PUBLISHER_ID --repo jiaton/tock-sniper-ext
+   gh secret set CWS_CLIENT_ID --repo jiaton/tock-sniper-chrome-extension
+   gh secret set CWS_CLIENT_SECRET --repo jiaton/tock-sniper-chrome-extension
+   gh secret set CWS_REFRESH_TOKEN --repo jiaton/tock-sniper-chrome-extension
+   gh secret set CWS_PUBLISHER_ID --repo jiaton/tock-sniper-chrome-extension
    ```
 
    Or via *GitHub → Settings → Secrets and variables → Actions → New repository secret*.
@@ -52,7 +52,7 @@ Use the Google account that owns the store item.
 ## Options
 
 - **Upload as a draft only** (submit manually in the dashboard):
-  `gh variable set CWS_AUTO_PUBLISH --body false --repo jiaton/tock-sniper-ext`
+  `gh variable set CWS_AUTO_PUBLISH --body false --repo jiaton/tock-sniper-chrome-extension`
 - **Retry an upload** for a version whose tag already exists (e.g. the token had expired):
   *Actions → Build Extension ZIP → Run workflow →* tick **Upload this version to the Chrome Web Store**.
 

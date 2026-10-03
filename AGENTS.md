@@ -52,7 +52,7 @@ DOM mode:  load page → wait → reload at release-800ms → dialog auto-opens 
 
 ## Files
 ```
-tock-sniper-ext/
+tock-sniper-chrome-extension/
 ├── manifest.json          # MV3, content scripts on exploretock.com
 ├── page-hook.js           # MAIN world, document_start: records Tock's own X-Tock-* request headers
 ├── popup.html             # Config UI: URL (+ "Use this page"), experience ID, party size, release time, date/time chips, mode

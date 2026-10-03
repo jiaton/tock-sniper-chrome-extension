@@ -34,7 +34,8 @@ Use the Google account that owns the store item.
    - Step 2: **Exchange authorization code for tokens** → copy the **refresh token**
 
 5. **Publisher ID.** [Developer Dashboard](https://chrome.google.com/webstore/devconsole) → *Account*
-   (it's shown on the account/publisher page).
+   (it's shown on the account/publisher page). Used by API v2. If it's missing or v2 denies access, the
+   script logs a warning and falls back to API v1.1, which only needs the item ID.
 
 6. **Add the secrets** (each command prompts for the value, so it never lands in your shell history —
    don't paste them anywhere else):
@@ -65,6 +66,7 @@ Use the Google account that owns the store item.
 
 | Log message | Fix |
 |---|---|
+| `API v2 can't access the item … falling back to API v1.1` | Upload still works (v1.1). To use v2, fix `CWS_PUBLISHER_ID` (dashboard → Account → Publisher ID) |
 | `invalid_grant … expired or revoked` | Refresh token expired (app still in *Testing*?) — publish the consent screen, redo step 4, update `CWS_REFRESH_TOKEN` |
 | `version … must be greater than` | Bump `manifest.json`'s version |
 | `uploadState=FAILED` | The package was rejected on upload — check the zip in the GitHub release |

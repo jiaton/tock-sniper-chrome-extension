@@ -284,7 +284,7 @@ function getConfig() {
 }
 
 async function run() {
-  const { sniping } = await chrome.storage.local.get("sniping");
+  const { sniping, armId } = await chrome.storage.local.get(["sniping", "armId"]);
   if (!sniping) return;
 
   const config = await getConfig();
@@ -309,6 +309,9 @@ async function run() {
       const urlTarget = targetFromUrl();
       myTarget = targets.find((t) => t.date === urlTarget.date) || targets[0];
     }
+    // Which armed run this tab belongs to; kept across reloads, so a tab left over from an earlier
+    // Arm can be told apart (background.js won't give it the API lease)
+    myTarget = { ...myTarget, armId: armId ?? null };
   }
 
   const urlTarget = targetFromUrl();
@@ -351,6 +354,9 @@ async function run() {
     }, 2000);
     return;
   }
+
+  // API tabs: only the lease holder sends requests; others wait here (and take over if it closes)
+  if ((myTarget.mode || "api") === "api" && !(await waitForApiLease())) return;
 
   // PAST release time (or no release time set) → snipe immediately
   updateClock(releaseMs);
@@ -420,6 +426,41 @@ async function run() {
       log("GO — sniping!");
       await snipe(config);
     }, fireDelay);
+  }
+}
+
+// ─── API lease (one sending API tab per armed run; see background.js) ─────
+
+async function requestApiLease() {
+  try {
+    return await chrome.runtime.sendMessage({ type: "tockSniper:apiLease", armId: myTarget?.armId ?? null });
+  } catch {
+    return { leader: true }; // background unreachable: don't block booking
+  }
+}
+
+// Resolves true once this tab holds the lease; false when disarmed or the tab is from an earlier run.
+async function waitForApiLease() {
+  let standby = false;
+  while (true) {
+    const r = await requestApiLease();
+    if (r?.leader) {
+      if (standby) log("▶️ Took over as the API tab");
+      return true;
+    }
+    if (r?.disarmed) return false;
+    if (r?.stale) {
+      log("💤 This tab is from an earlier Arm — not sending anything. You can close it.", "error");
+      setStatus("💤 Old tab — close it", "error");
+      document.title = `💤 ${document.title.replace(/^🛎️ /, "")}`;
+      return false;
+    }
+    if (!standby) {
+      standby = true;
+      log("💤 Another tab is the API tab — standing by (takes over if that tab is closed)");
+      setStatus("💤 Standby — another tab sends the API requests", "waiting");
+    }
+    await sleep(2000);
   }
 }
 
@@ -503,6 +544,12 @@ async function monitorLoop(config, lastReason = "") {
   while (Date.now() < until) {
     if (!(await chrome.storage.local.get("sniping")).sniping) {
       log("⏹ Disarmed — monitoring stopped");
+      return;
+    }
+    // Re-armed since (this tab is now stale) or another tab holds the lease → stop sending
+    if (!(await requestApiLease())?.leader) {
+      log("⏹ Another tab is the API tab now — monitoring stopped");
+      setStatus("💤 Stopped — another tab is the API tab", "waiting");
       return;
     }
     checks++;

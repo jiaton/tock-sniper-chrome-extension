@@ -34,6 +34,11 @@ content.js (per tab)
 ### Target Assignment
 - **API**: one tab (`?_tidx=api`) handles every API target, by priority (`apiTargets(config)`). One tab means one
   request budget: Cloudflare 429s after ~50 requests in ~0.6s per client, and N tabs bursting separately sent N×42.
+- **API lease**: only one API tab per armed run sends anything. Each API tab asks `background.js`
+  (`tockSniper:apiLease`) before its countdown and on every monitor check; the first to ask holds it (by tab
+  ID — reloads and checkout keep it). Others show "💤 Standby" and take over within ~2s if the holder is
+  closed. Arm stores a new `armId`; tabs claim it into their sessionStorage target, so tabs left from an
+  earlier Arm (or pre-3.2 per-target API tabs) get `stale` and send nothing. DOM tabs never send API requests.
 - **DOM**: one tab per target via `?_tidx=N` (it clicks the page, so one date/time per tab)
 - **Priority** = the order dates and times were added in the popup (chips are numbered); date-major
 - Content script reads `_tidx` once, looks up its target(s), saves to sessionStorage

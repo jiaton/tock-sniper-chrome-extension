@@ -11,12 +11,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 chrome.storage.onChanged.addListener((changes) => {
   if (changes.sniping?.newValue === true) {
-    // Clear claimed targets so tabs can claim fresh; a new run notifies afresh.
-    chrome.storage.local.set({ claimedDates: {}, tockNextIdx: 0, tockClockSync: null, notifySent: {} });
+    // Clear claimed targets so tabs can claim fresh; a new run notifies afresh. A new armId makes tabs
+    // left over from an earlier run stand down (see the API lease below).
+    chrome.storage.local.set({ claimedDates: {}, tockNextIdx: 0, tockClockSync: null, notifySent: {}, apiLeader: null, armId: Date.now() });
     chrome.alarms.create("tock-keepalive", { periodInMinutes: 0.5 });
   }
   if (changes.sniping?.newValue === false) {
-    chrome.storage.local.set({ claimedDates: {}, tockNextIdx: 0, tockClockSync: null, notifySent: {} });
+    chrome.storage.local.set({ claimedDates: {}, tockNextIdx: 0, tockClockSync: null, notifySent: {}, apiLeader: null });
     chrome.alarms.clear("tock-keepalive");
   }
 });
@@ -61,6 +62,32 @@ async function handleNotify(msg) {
   return sendTelegram(msg.text, msg.override);
 }
 
+// ─── API lease ─────────────────────────────────────────────────────────────
+// Only one tab may send API requests (Tock rate-limits per client): the first API tab of the current
+// armed run to ask holds the lease (by tab ID, so reloads and the checkout page keep it); other API tabs
+// stand by and take over if that tab is closed. Tabs from an earlier run (stale armId) never get it.
+let leaseQueue = Promise.resolve();
+
+async function handleLease(msg, sender) {
+  const tabId = sender.tab?.id;
+  const { sniping, armId, apiLeader } = await chrome.storage.local.get(["sniping", "armId", "apiLeader"]);
+  if (!sniping) return { leader: false, disarmed: true };
+  if ((msg.armId ?? null) !== (armId ?? null)) return { leader: false, stale: true };
+  if (apiLeader && apiLeader.tabId !== tabId) {
+    const alive = await chrome.tabs.get(apiLeader.tabId).then(() => true, () => false);
+    if (alive) return { leader: false };
+  }
+  if (apiLeader?.tabId !== tabId) await chrome.storage.local.set({ apiLeader: { tabId, at: Date.now() } });
+  return { leader: true };
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  leaseQueue = leaseQueue.then(async () => {
+    const { apiLeader } = await chrome.storage.local.get("apiLeader");
+    if (apiLeader?.tabId === tabId) await chrome.storage.local.set({ apiLeader: null });
+  }).catch(() => {});
+});
+
 // ─── Activity log ──────────────────────────────────────────────────────────
 // Content scripts send every overlay line ({ type: "tockSniper:log", entry }); kept across runs (newest
 // ACTIVITY_LOG_MAX) in chrome.storage.local.activityLog for the popup's export. Lines are batched and
@@ -86,6 +113,10 @@ function appendLog(entry) {
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type === "tockSniper:apiLease") {
+    leaseQueue = leaseQueue.then(() => handleLease(msg, _sender)).then(sendResponse, (err) => sendResponse({ leader: false, error: err.message }));
+    return true;
+  }
   if (msg?.type === "tockSniper:log") {
     if (msg.entry) appendLog(msg.entry);
     return;

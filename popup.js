@@ -291,6 +291,7 @@ chrome.storage.local.get(["config", "sniping", "status"], (d) => {
     $("#releaseTime").value = d.config.releaseTime || defaultReleaseTime();
     setRadio("snipeMode", d.config.snipeMode || "api");
     setRadio("expSource", d.config.expSource || "hybrid");
+    setRadio("partyPolicy", d.config.partyPolicy || "exact");
     $("#experienceId").value = d.config.experienceId || "";
     const mon = d.config.monitor || {};
     $("#monitorEnabled").checked = !!mon.enabled;
@@ -353,6 +354,9 @@ function updateButton(armed = armedState) {
 function updateHints() {
   $("#expSourceHint").textContent = EXP_SOURCE_HINTS[radioValue("expSource")] || "";
   $("#snipeModeHint").textContent = SNIPE_MODE_HINTS[radioValue("snipeMode")] || "";
+  $("#partyPolicyHint").textContent = radioValue("partyPolicy") === "max"
+    ? "API: if no table fits everyone, locks the largest size offered (e.g. 1 of 2) and tells you to book the rest separately."
+    : "Locks only for the whole party.";
 }
 
 function showStatus(msg, type) {
@@ -448,6 +452,7 @@ function readConfig() {
     snipeMode: radioValue("snipeMode"),
     experienceId: parseInt($("#experienceId").value) || null,
     expSource: radioValue("expSource"),
+    partyPolicy: radioValue("partyPolicy"),
     dates: [...state.dates],
     monitor: {
       enabled: $("#monitorEnabled").checked,
@@ -588,7 +593,7 @@ $("#experienceId").addEventListener("input", (e) => {
   saveConfig();
   if (lastPageInfo) renderExperienceSuggestions(lastPageInfo);
 });
-document.querySelectorAll('input[name="snipeMode"], input[name="expSource"]').forEach((el) =>
+document.querySelectorAll('input[name="snipeMode"], input[name="expSource"], input[name="partyPolicy"]').forEach((el) =>
   el.addEventListener("change", () => { updateHints(); updateButton(); saveConfig(); })
 );
 

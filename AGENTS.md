@@ -10,7 +10,7 @@ Auto-grab reservations on Tock (exploretock.com) the instant slots drop. Works w
 popup.js (config UI)
     │
     ├── Saves config to chrome.storage.local
-    │   { url, partySize, releaseTime, prefTimes, snipeMode, experienceId, expSource, dates, targets[],
+    │   { url, partySize, partyPolicy, releaseTime, prefTimes, snipeMode, experienceId, expSource, dates, targets[],
     │     monitor: { enabled, intervalSec, hours, flexMinutes }, notify: { telegram: { enabled, token, chatId } } }
     │
     └── On "Arm": builds targets[] (date-major: every time of date 1, then date 2 — in the order added),
@@ -278,6 +278,14 @@ Tabs opened before the extension was (re)loaded have no content script — the p
   `<restaurant>:<kind>`; background.js serializes notify messages and records them in `notifySent`,
   cleared on Arm/Disarm). The popup's "Send test" passes `override: {token, chatId}`. Notification failures never
   block booking. The token is stored in `chrome.storage.local` only — never commit one.
+
+## Party-size policy (`config.partyPolicy`, API only)
+- `exact` (default, "Whole party only"): locks only for `partySize`.
+- `max` ("As many as offered"): some experiences only sell e.g. single seats (Fù Huì Huá's "An Autumn Hunt",
+  2026-10-03: partySize [1]). `partySizesToTry()` → full party, then smaller sizes the experience lists. Monitor
+  and pre-check use `chooseTargetForParty()`: every target (exact, then ±flex) for the full party first, then
+  the next size down. The release burst caps to the largest listed size once offerings arrive. A partial lock
+  logs/notifies "Locked 1 of 2 guests — book the other 1 separately (e.g. another account)".
 
 ## Activity log
 `content.js`'s `log()` also sends every overlay line to `background.js` (`{type: "tockSniper:log", entry: {t, venue,

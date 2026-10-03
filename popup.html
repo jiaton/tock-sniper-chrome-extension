@@ -159,6 +159,12 @@
       <input id="partySize" type="number" min="1" max="20" value="2" />
       <button type="button" id="partyPlus" aria-label="More guests">+</button>
     </div>
+    <span class="mini-label">If only smaller bookings are offered (e.g. single seats)</span>
+    <div class="seg">
+      <label><input type="radio" name="partyPolicy" value="exact" checked><span>Whole party only</span></label>
+      <label><input type="radio" name="partyPolicy" value="max"><span>As many as offered</span></label>
+    </div>
+    <small id="partyPolicyHint"></small>
     <label class="field-label" for="releaseTime">Release time</label>
     <input id="releaseTime" type="datetime-local" step="1" />
     <small>Local clock (NTP-synced). API tabs start 100ms before this; DOM tabs reload 800ms before.</small>

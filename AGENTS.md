@@ -39,7 +39,7 @@ content.js (per tab)
 ### Snipe Modes
 | Mode | Tabs per date/time | Behavior |
 |------|-------------------|----------|
-| ⚡ API Direct | 1 | No reload. ~42 `PUT /api/ticket/group/lock` sends centered on the release time (5ms apart within ±40ms, sparser outward, T-100ms … T+3s), plus offerings ≤ every 50ms until an experience is listed. First lock success wins; stops on sold-out or 429. A tab starting after T+3s sends once. |
+| ⚡ API Direct | 1 | No reload. ~42 `PUT /api/ticket/group/lock` sends centered on the release time (5ms apart within ±40ms, sparser outward, T-100ms … T+3s), plus offerings ≤ every 50ms until an experience is listed. First lock success wins; stops on sold-out or 429. A tab starting after T+3s sends once, only if offerings + calendar show a table for the party. |
 | 🖱️ DOM Click | 1 | Reloads 800ms before release, clicks through the booking dialog. Retries (reload) up to 3× within 10s if the page shows no availability. |
 | 🔥 Both | 2 | Opens separate API + DOM tabs. They run in parallel, independently. |
 
@@ -80,7 +80,11 @@ tock-sniper-chrome-extension/
      | T+40 … T+100ms | 15ms | 4 |
      | T+100 … T+500ms | 50ms | 8 |
      | T+500ms … T+3s | 250ms | 11 |
-     Browsers clamp timers to ~4ms, so `waitUntil()` sleeps coarsely to 25ms before each send and then yields via `MessageChannel` for sub-ms precision. Offerings (until the first non-empty list) ride along at most every 50ms. A tab that starts after T+3s (or has no release time) sends a single lock (plus one offerings if it needs the ID). Navigates to checkout on the first lock without an in-body error. Stops early on:
+     Browsers clamp timers to ~4ms, so `waitUntil()` sleeps coarsely to 25ms before each send and then yields via `MessageChannel` for sub-ms precision. Offerings (until the first non-empty list) ride along at most every 50ms. A tab that starts after T+3s (or has no release time) makes a single attempt, pre-checked: offerings (unless
+     `manual`) + calendar first, and no lock is sent when nothing is listed, the experience's listed party sizes
+     exclude the party, or the calendar has no table for the party at the target time (`🛑 No lock sent: …`).
+     A failed pre-check request (other than 429) doesn't block the attempt. The burst is never pre-checked
+     (the ~150ms wait would miss the release). Navigates to checkout on the first lock without an in-body error. Stops early on:
      - **429** (HTTP status or in-body) — the first one. Observed 2026-10-02: Cloudflare answered HTTP 429 after ~50 lock requests in ~0.6s.
      - **Sold out** — 3 consecutive in-body 410s ("someone else just selected this…") for requests sent ≥ 500ms after release. Earlier 410s are ignored because slots may not be open yet.
      The overlay status shows live counts; a `📊 Sent N lock … → 410×a 429×b` line summarizes the run.

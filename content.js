@@ -1099,11 +1099,42 @@ async function snipeApi(config) {
     }
   };
 
+  // Single attempt (no release-time race): check offerings + calendar first and skip a lock that can't
+  // succeed — every lock counts against the rate limit. Not done for the burst, where waiting ~150ms for
+  // the answer would miss the release, nor for monitor attempts (quiet), which check before calling.
+  const precheck = async () => {
+    try {
+      if (expSource !== "manual") {
+        stats.offeringsSent++;
+        const experiences = await fetchOfferings(headers);
+        offeringsFound = true;
+        if (!experiences.length) return "no experience listed";
+        log(`📋 Offerings: ${formatExperiences(experiences)}`);
+        useExperience(pickExperience(experiences, partySize, manualId), "offerings");
+        const exp = experiences.find((e) => e.id === experienceId);
+        if (exp?.partySizes.length && !exp.partySizes.includes(partySize)) return `${exp.name} is listed for ${partyRange(exp.partySizes)}`;
+      }
+      if (!experienceId) return "";
+      const open = openTimesFor(await fetchCalendar(headers), partySize, myDate, [experienceId]);
+      if (!open[timeParam]) return `no table for ${partySize} at ${myDate} ${timeParam}${Object.keys(open).length ? ` (open that day: ${formatOpenTimes(open)})` : ""}`;
+    } catch (err) {
+      if (err.status === 429) return "rate limited (429)";
+      log(`📋 Pre-check failed (${err.message}) — trying anyway`);
+    }
+    return "";
+  };
+
   if (singleShot) {
     say("⏱️ Past the release window — single attempt, no burst");
-    if (!offeringsFound) await fireOfferings();
-    if (body) await fireOne(++attempt);
-    stop(body ? "single attempt" : "no experience ID");
+    const skip = config.quiet ? "" : await precheck();
+    if (skip) {
+      log(`🛑 No lock sent: ${skip}`);
+      stop(`skipped: ${skip}`);
+    } else {
+      if (!offeringsFound) await fireOfferings();
+      if (body) await fireOne(++attempt);
+      stop(body ? "single attempt" : "no experience ID");
+    }
   } else {
     // Send at precomputed absolute times: densest around release (see API_SCHEDULE)
     const fireTimes = buildFireTimes(releaseMs);
@@ -1133,6 +1164,7 @@ async function snipeApi(config) {
 
   const failure = !experienceId ? "No experience ID — offerings never listed one"
     : stopReason === "time window ended" ? "API lock failed after all attempts"
+    : stopReason.startsWith("skipped: ") ? `No lock sent — ${stopReason.slice(9)}`
     : stopReason === "single attempt" ? `Single attempt failed (${Object.keys(stats.byStatus).join(", ") || "no response"})`
     : `Stopped: ${stopReason}`;
   say(`❌ ${failure}`, "error");

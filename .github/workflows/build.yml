@@ -3,6 +3,13 @@ name: Build Extension ZIP
 on:
   push:
     branches: [main]
+  # Manual run, e.g. to retry the store upload for a version whose tag already exists
+  workflow_dispatch:
+    inputs:
+      store_upload:
+        description: Upload this version to the Chrome Web Store
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -42,16 +49,33 @@ jobs:
           path: tock-sniper-ext.zip
 
       - name: Create tag and release
+        id: release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.version.outputs.tag }}"
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "Tag $TAG already exists, skipping release"
+            echo "created=false" >> "$GITHUB_OUTPUT"
           else
             git tag "$TAG"
             git push origin "$TAG"
             gh release create "$TAG" tock-sniper-ext.zip \
               --title "Tock Sniper $TAG" \
               --generate-notes
+            echo "created=true" >> "$GITHUB_OUTPUT"
           fi
+
+      # For a new version (or a manual run with store_upload). Skips itself (with a notice) until the
+      # CWS_* secrets are configured — see docs/chrome-web-store-ci.md. Set the repo variable
+      # CWS_AUTO_PUBLISH=false to upload a draft only.
+      - name: Upload to Chrome Web Store
+        if: steps.release.outputs.created == 'true' || inputs.store_upload
+        env:
+          EXTENSION_ID: ppgobdppcdhckikdbajbhlmohfmhpioo
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+          CWS_AUTO_PUBLISH: ${{ vars.CWS_AUTO_PUBLISH }}
+        run: .github/scripts/cws-publish.sh tock-sniper-ext.zip

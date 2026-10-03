@@ -6,6 +6,9 @@
 let myDate = null;
 let myTarget = null;
 let overlay = null;
+// Result of the single-attempt pre-check ({ at, open: {"HH:MM": n}, rateLimited }), so the monitor that
+// follows doesn't repeat the same offerings + calendar requests straight away
+let lastPrecheck = null;
 // DOM mode reload lead. After a reload, Tock requests availability ~1.2–1.5s later (measured
 // 2026-10-02), so reloading 800ms early lands that request ~400–700ms after release.
 const RELOAD_LEAD_MS = 800;
@@ -480,6 +483,15 @@ async function monitorLoop(config, lastReason = "") {
   let lastMsg = "";
   let lastAvail = null;    // logged when the open times change
   const note = (msg, type = "info") => { if (msg !== lastMsg) log(msg, type); lastMsg = msg; };
+
+  // The pre-check just read offerings + calendar: unless it saw a usable time nearby, wait one interval
+  // (or the 429 back-off) before the first check instead of asking again right away.
+  if (lastPrecheck && Date.now() - lastPrecheck.at < 10000 && !pickTime(lastPrecheck.open, targetTime, flexMinutes)) {
+    const firstWait = lastPrecheck.rateLimited ? MONITOR_429_BACKOFF_MS : intervalMs * (0.8 + Math.random() * 0.4);
+    setStatus(`👀 Monitoring — first check in ${Math.round(firstWait / 1000)}s`, lastPrecheck.rateLimited ? "error" : "waiting");
+    await sleep(Math.min(firstWait, until - Date.now()));
+  }
+  lastPrecheck = null;
 
   while (Date.now() < until) {
     if (!(await chrome.storage.local.get("sniping")).sniping) {
@@ -1103,22 +1115,24 @@ async function snipeApi(config) {
   // succeed — every lock counts against the rate limit. Not done for the burst, where waiting ~150ms for
   // the answer would miss the release, nor for monitor attempts (quiet), which check before calling.
   const precheck = async () => {
+    const seen = (open, rateLimited = false) => { lastPrecheck = { at: Date.now(), open, rateLimited }; };
     try {
       if (expSource !== "manual") {
         stats.offeringsSent++;
         const experiences = await fetchOfferings(headers);
         offeringsFound = true;
-        if (!experiences.length) return "no experience listed";
+        if (!experiences.length) { seen({}); return "no experience listed"; }
         log(`📋 Offerings: ${formatExperiences(experiences)}`);
         useExperience(pickExperience(experiences, partySize, manualId), "offerings");
         const exp = experiences.find((e) => e.id === experienceId);
-        if (exp?.partySizes.length && !exp.partySizes.includes(partySize)) return `${exp.name} is listed for ${partyRange(exp.partySizes)}`;
+        if (exp?.partySizes.length && !exp.partySizes.includes(partySize)) { seen({}); return `${exp.name} is listed for ${partyRange(exp.partySizes)}`; }
       }
       if (!experienceId) return "";
       const open = openTimesFor(await fetchCalendar(headers), partySize, myDate, [experienceId]);
+      seen(open);
       if (!open[timeParam]) return `no table for ${partySize} at ${myDate} ${timeParam}${Object.keys(open).length ? ` (open that day: ${formatOpenTimes(open)})` : ""}`;
     } catch (err) {
-      if (err.status === 429) return "rate limited (429)";
+      if (err.status === 429) { seen({}, true); return "rate limited (429)"; }
       log(`📋 Pre-check failed (${err.message}) — trying anyway`);
     }
     return "";

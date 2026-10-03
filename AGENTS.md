@@ -254,7 +254,9 @@ Tabs opened before the extension was (re)loaded have no content script — the p
   It locks only a time with a table for the party: the target time, else the closest open time within
   `±flexMinutes` (default 60; 0 = exact only); no seats → no lock request. If the calendar can't be read it
   just tries the target time. Offerings answering 400 "Reservations are currently unavailable" is logged
-  as `🔒 Booking switched off`. Success → checkout. A 429 pauses 10 min (lock 429s persisted ~28 min after a burst on 2026-10-02 while
+  as `🔒 Booking switched off`. Right after a pre-checked single attempt (e.g. a tab reloaded after release), the first
+  check waits one interval (10 min if the pre-check got a 429) unless the pre-check already saw a usable nearby
+  time, so a reload costs offerings + calendar once, not twice. Success → checkout. A 429 pauses 10 min (lock 429s persisted ~28 min after a burst on 2026-10-02 while
   offerings kept working). Stops on Disarm. Hidden tabs get timer-throttled by Chrome (≥1 min between checks).
 - **Telegram** (`config.notify.telegram`): content scripts send `{type: "tockSniper:notify", text}` to
   `background.js`, which POSTs `https://api.telegram.org/bot<token>/sendMessage`, so the token never reaches

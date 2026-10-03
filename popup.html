@@ -74,6 +74,8 @@
   .chip.pick:hover { border-color: var(--accent); }
   .chip.pick.selected { border-color: var(--accent); color: var(--accent); font-weight: 600; }
   .chip.pick .meta { color: var(--muted); font-weight: 400; margin-left: 4px; }
+  .chip.pick.nofit .meta { color: var(--danger); }
+  .chip.pick.nofit .meta::after { content: " ✕"; }
   .suggest { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 7px 9px; border-radius: 7px; background: var(--info-bg); color: var(--info-text); font-size: 12px; }
   .suggest .text { flex: 1; min-width: 0; }
   .suggest .src { display: block; font-size: 11px; opacity: .75; }
@@ -221,7 +223,7 @@
         <span class="mini-label">Chat ID</span>
         <input id="tgChatId" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="e.g. 123456789" />
         <button type="button" id="tgTest">Send test</button> <small id="tgTestResult"></small>
-        <small>Sent when a slot is locked, bookings open, or monitoring ends. Stored only in this browser.</small>
+        <small>Sent when a slot is locked, seats show up, or monitoring ends. Stored only in this browser.</small>
       </div>
 
       <div class="log-actions">

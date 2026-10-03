@@ -243,19 +243,21 @@ Tabs opened before the extension was (re)loaded have no content script — the p
 
 ## Monitor & Telegram (popup → "Monitor & notifications", both off by default)
 - **Monitor** (`config.monitor`, API tabs): when the release snipe fails (not open yet, sold out, window
-  over), keep checking every `intervalSec` (±20% jitter) for `hours`. Each check polls offerings only;
-  once the venue lists experiences, it also reads the calendar and logs the open times for the target date
-  (when they change). It locks only a time with a table for the party: the target time, else the closest
-  open time within `±flexMinutes` (default 60; 0 = exact only). If the calendar can't be read it just tries
-  the target time. Offerings answering 400 "Reservations are currently unavailable" after being open is
-  logged as "closed again" (seen 2026-10-03: a venue opened for ~1 min). Success → checkout. A 429 pauses 10 min (lock 429s persisted ~28 min after a burst on 2026-10-02 while
+  over), keep checking every `intervalSec` (±20% jitter) for `hours`. Each check polls offerings only
+  until an experience is listed. **A listed experience is not availability** — sold-out venues keep
+  listing theirs (Fù Huì Huá, 2026-10-03: listed, page says "All reservations sold out"). Once listed, each
+  check also reads the calendar and logs on change `🔓 Seats <date>, N guests: <times>` or `🈵 No seats`.
+  It locks only a time with a table for the party: the target time, else the closest open time within
+  `±flexMinutes` (default 60; 0 = exact only); no seats → no lock request. If the calendar can't be read it
+  just tries the target time. Offerings answering 400 "Reservations are currently unavailable" is logged
+  as `🔒 Booking switched off`. Success → checkout. A 429 pauses 10 min (lock 429s persisted ~28 min after a burst on 2026-10-02 while
   offerings kept working). Stops on Disarm. Hidden tabs get timer-throttled by Chrome (≥1 min between checks).
 - **Telegram** (`config.notify.telegram`): content scripts send `{type: "tockSniper:notify", text}` to
   `background.js`, which POSTs `https://api.telegram.org/bot<token>/sendMessage`, so the token never reaches
   the page. `api.telegram.org` is an `optional_host_permissions` entry — requested by the popup only when
   Telegram is switched on or "Send test" is pressed (user gesture), so updates don't trigger a new
   permission warning (Chrome would otherwise disable the extension until users accept it). Sent on: lock success / DOM checkout (per target), and once per
-  restaurant per armed run for monitor start, bookings opened, monitor end (`dedupeKey`
+  restaurant per armed run for monitor start, seats found (calendar), monitor end (`dedupeKey`
   `<restaurant>:<kind>`; background.js serializes notify messages and records them in `notifySent`,
   cleared on Arm/Disarm). The popup's "Send test" passes `override: {token, chatId}`. Notification failures never
   block booking. The token is stored in `chrome.storage.local` only — never commit one.

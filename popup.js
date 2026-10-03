@@ -210,7 +210,13 @@ function renderExperienceSuggestions(info) {
     const meta = document.createElement("span");
     meta.className = "meta";
     const [lo, hi] = [Math.min(...e.partySizes), Math.max(...e.partySizes)];
-    const sizes = !e.partySizes.length ? "" : lo === hi ? ` · ${lo}p` : ` · ${lo}–${hi}p`;
+    const sizes = !e.partySizes.length ? "" : lo === hi ? ` · ${lo} only` : ` · ${lo}–${hi}`;
+    // The listed party sizes (offerings): flag experiences the current party size can't book
+    const party = parseInt($("#partySize").value) || 2;
+    if (e.partySizes.length && !e.partySizes.includes(party)) {
+      chip.classList.add("nofit");
+      chip.title += ` — not bookable for ${party} guests (listed for ${lo === hi ? lo : `${lo}–${hi}`})`;
+    }
     meta.textContent = `${e.name.length > 28 ? e.name.slice(0, 27) + "…" : e.name}${sizes}`;
     chip.appendChild(meta);
     chip.addEventListener("click", () => {
@@ -469,6 +475,7 @@ function saveConfig() {
 function stepParty(delta) {
   $("#partySize").value = clampParty((parseInt($("#partySize").value) || 2) + delta);
   saveConfig();
+  if (lastPageInfo) renderExperienceSuggestions(lastPageInfo);
 }
 $("#partyMinus").addEventListener("click", () => stepParty(-1));
 $("#partyPlus").addEventListener("click", () => stepParty(1));
@@ -563,7 +570,7 @@ $("#tgTest").addEventListener("click", async () => {
     out.textContent = `Failed: ${err.message}`;
   }
 });
-$("#partySize").addEventListener("input", saveConfig);
+$("#partySize").addEventListener("input", () => { saveConfig(); if (lastPageInfo) renderExperienceSuggestions(lastPageInfo); });
 $("#releaseTime").addEventListener("input", () => { saveConfig(); renderReleaseSuggestion(); });
 $("#experienceId").addEventListener("input", (e) => {
   const digits = e.target.value.replace(/\D/g, "");

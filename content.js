@@ -33,8 +33,8 @@ const OFFERINGS_MIN_GAP_MS = 50;    // offerings rides along with lock sends, bu
 const SOLD_OUT_GRACE_MS = 500;
 const SOLD_OUT_STREAK = 3;
 const FALLBACK_BUILD_NUMBER = "servingstack-2026-09-30RC03-00";
-// Monitor (opt-in, config.monitor): after a failed snipe, poll offerings until bookings open, then try
-// one lock per check. Lock 429s were still being returned ~28 min after a burst (2026-10-02) while
+// Monitor (opt-in, config.monitor): after a failed snipe, poll offerings until an experience is listed,
+// then read the calendar and lock only when it shows seats. Lock 429s were still being returned ~28 min after a burst (2026-10-02) while
 // offerings kept answering, so lock is only tried once the venue lists experiences.
 const MONITOR_429_BACKOFF_MS = 10 * 60 * 1000;
 // Once open, each check also reads the calendar (seats per time) and locks only a time that has a
@@ -464,24 +464,22 @@ async function monitorLoop(config, lastReason = "") {
   const partySize = config.partySize || 2;
   const manualId = config.expSource === "auto" ? null : extractExperienceId(config);
 
-  log(`👀 Monitoring every ~${intervalMs / 1000}s until ${new Date(until).toLocaleTimeString()} — offerings only until bookings open`);
+  log(`👀 Monitoring every ~${intervalMs / 1000}s until ${new Date(until).toLocaleTimeString()} — offerings only until an experience is listed`);
   notify(`👀 Tock Sniper is monitoring ${restaurantName()} for ${partySize} guests\nTargets: ${allTargetsLabel(config)}\nLast attempt: ${lastReason || "no slot"}`, "monitoring");
 
   const flexMinutes = Math.max(0, m.flexMinutes ?? MONITOR_DEFAULT_FLEX_MIN);
   const targetTime = myTarget.timeParam || displayTimeToParam24(myTarget.time || "");
   log(`👀 Target ${myDate} ${targetTime || "?"} for ${partySize}${flexMinutes ? ` — also takes the closest open time within ±${flexMinutes} min` : " — exact time only"}`);
 
+  // A listed experience is NOT availability: sold-out venues keep listing theirs. Seats come from
+  // the calendar; "seats" = some time on the target date has a table for the party.
   let checks = 0;
-  let openNotified = false;
-  let wasOpen = false;
+  let seatsNotified = false;
+  let listed = "";         // experiences last logged as listed
+  let warned = "";         // party-size warning last logged
   let lastMsg = "";
   let lastAvail = null;    // logged when the open times change
   const note = (msg, type = "info") => { if (msg !== lastMsg) log(msg, type); lastMsg = msg; };
-  const closed = (msg) => {
-    if (wasOpen) log("🔒 Bookings closed again", "error");
-    wasOpen = false;
-    note(msg);
-  };
 
   while (Date.now() < until) {
     if (!(await chrome.storage.local.get("sniping")).sniping) {
@@ -493,12 +491,19 @@ async function monitorLoop(config, lastReason = "") {
     try {
       const experiences = await fetchOfferings(headers);
       if (!experiences.length) {
-        closed("👀 Not open yet");
-        setStatus(`👀 Monitoring — not open yet (check ${checks})`, "waiting");
+        if (listed) log("📋 No experiences listed any more");
+        listed = "";
+        note("👀 No experience listed yet");
+        setStatus(`👀 Monitoring — nothing listed yet (check ${checks})`, "waiting");
       } else {
-        if (!wasOpen) log(`🔓 Bookings open: ${formatExperiences(experiences)}`, "success");
-        wasOpen = true;
+        const names = formatExperiences(experiences);
+        if (names !== listed) log(`📋 Listed: ${names}`);
+        listed = names;
         const exp = pickExperience(experiences, partySize, manualId);
+        const sizeWarning = exp.partySizes.length && !exp.partySizes.includes(partySize)
+          ? `⚠️ ${exp.name} is listed for ${partyRange(exp.partySizes)} — ${partySize} guests can't book it unless that changes` : "";
+        if (sizeWarning && sizeWarning !== warned) log(sizeWarning, "error");
+        warned = sizeWarning;
 
         // Which times actually have a table for this party? (null: calendar unavailable → just try the target)
         let openTimes = null;
@@ -509,7 +514,12 @@ async function monitorLoop(config, lastReason = "") {
           if (avail !== lastAvail) {
             const others = Object.keys(openTimesFor(slots, partySize, null, [exp.id])).filter((k) => !k.startsWith(myDate));
             const otherDates = [...new Set(others.map((k) => k.split(" ")[0]))];
-            log(`📅 ${myDate}, ${partySize} guests: ${avail || "no open times"}${otherDates.length ? ` · other dates: ${otherDates.slice(0, 8).join(", ")}${otherDates.length > 8 ? "…" : ""}` : ""}`, avail ? "success" : "info");
+            const wasSeats = lastAvail && !lastAvail.startsWith("error:");
+            const sizes = tableSizes(slots, myDate, [exp.id]);
+            log(avail
+              ? `🔓 Seats ${myDate}, ${partySize} guests: ${avail}`
+              : `${wasSeats ? "🈵 Seats gone" : "🈵 No seats"} — ${myDate}, ${partySize} guests${sizes ? ` (tables that day seat ${sizes})` : " (no tables that day)"}${otherDates.length ? ` · other dates with seats: ${otherDates.slice(0, 8).join(", ")}${otherDates.length > 8 ? "…" : ""}` : ""}`,
+            avail ? "success" : "info");
             lastAvail = avail;
           }
         } catch (err) {
@@ -520,28 +530,27 @@ async function monitorLoop(config, lastReason = "") {
         }
 
         const time = openTimes ? pickTime(openTimes, targetTime, flexMinutes) : targetTime;
-        if (!openNotified) {
-          openNotified = true;
-          notify(() => `🔓 Bookings just opened at ${restaurantName()}.\n${openTimes ? `${myDate} for ${partySize}: ${formatOpenTimes(openTimes) || "no open times"}\n` : ""}Trying to lock: ${allTargetsLabel(config)} (${partySize} guests)…`, "opened");
+        if (openTimes && Object.keys(openTimes).length && !seatsNotified) {
+          seatsNotified = true;
+          notify(() => `🔓 Seats at ${restaurantName()} — ${myDate}, ${partySize} guests: ${formatOpenTimes(openTimes)}\nTrying to lock: ${allTargetsLabel(config)}…`, "opened");
         }
         if (!time) {
-          note(`👀 Open, but no table for ${partySize} at ${myDate} ${targetTime}${flexMinutes ? ` ±${flexMinutes} min` : ""}`);
-          setStatus(`👀 Monitoring — open, no matching time (check ${checks})`, "waiting");
+          note(`👀 No table for ${partySize} at ${myDate} ${targetTime}${flexMinutes ? ` ±${flexMinutes} min` : ""} — not sending a lock`);
+          setStatus(`👀 Monitoring — no seats (check ${checks})`, "waiting");
         } else {
           if (time !== targetTime) log(`🔀 ${targetTime} not available — trying ${time} instead`);
           const ok = await snipeApi({ ...config, experienceId: exp.id, expSource: "manual", releaseTime: null, quiet: true, timeParam: time });
           if (ok) return;
           const reason = JSON.parse(sessionStorage.getItem("tockLockResult") || "{}").summary || "no slot";
           if (/429/.test(reason)) wait = MONITOR_429_BACKOFF_MS;
-          note(`👀 Open, but ${myDate} ${time}: ${reason}`);
-          setStatus(`👀 Monitoring — open, slot not available (check ${checks})`, "waiting");
+          note(`👀 Lock ${myDate} ${time} failed: ${reason}`);
+          setStatus(`👀 Monitoring — lock failed (check ${checks})`, "waiting");
         }
       }
     } catch (err) {
       if (err.status === 429) wait = MONITOR_429_BACKOFF_MS;
-      // "Reservations are currently unavailable" (400) = the venue closed bookings again
-      if (/currently unavailable/i.test(err.message)) closed(`👀 Closed: ${err.message}`);
-      else note(`👀 Check failed: ${err.message}`, "error");
+      // 400 "Reservations are currently unavailable": the venue switched online booking off
+      note(/currently unavailable/i.test(err.message) ? `🔒 Booking switched off: ${err.message}` : `👀 Check failed: ${err.message}`, "error");
     }
     if (wait === MONITOR_429_BACKOFF_MS) {
       note(`⏸️ Rate limited — next check in ${MONITOR_429_BACKOFF_MS / 60000} min`, "error");
@@ -847,8 +856,25 @@ function pickExperience(experiences, partySize, preferredId) {
   return experiences.find(fits) || experiences[0];
 }
 
+// "1–6 guests" from the listed party sizes
+function partyRange(sizes) {
+  if (!sizes.length) return "? guests";
+  const lo = Math.min(...sizes), hi = Math.max(...sizes);
+  return lo === hi ? `${lo} guest${lo > 1 ? "s" : ""} only` : `${lo}–${hi} guests`;
+}
+
 function formatExperiences(experiences) {
-  return experiences.map((e) => `${e.id} ${e.name} (${e.partySizes.join("/") || "?"}p)`).join("; ");
+  return experiences.map((e) => `${e.id} ${e.name} (${partyRange(e.partySizes)})`).join("; ");
+}
+
+// Table sizes the calendar has on a date, e.g. "1, 2, 4–6" (whether or not they're free)
+function tableSizes(slots, date, expIds) {
+  const sizes = new Set();
+  for (const s of slots) {
+    if (s.date !== date || (s.expIds.length && !s.expIds.some((id) => expIds.includes(id)))) continue;
+    sizes.add(s.min === s.max || s.max === Infinity ? `${s.min}${s.max === Infinity ? "+" : ""}` : `${s.min}–${s.max}`);
+  }
+  return [...sizes].sort((a, b) => parseInt(a) - parseInt(b)).join(", ");
 }
 
 // Tock answers errors with HTTP 200 and a top-level f2 error message:

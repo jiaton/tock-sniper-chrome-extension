@@ -23,14 +23,21 @@ chrome.storage.onChanged.addListener((changes) => {
 
 // ─── Telegram notifications ────────────────────────────────────────────────
 // Content scripts and the popup send { type: "tockSniper:notify", text } here, so the bot token
-// (config.notify.telegram, entered in the popup) never reaches the Tock page. `override`
+// (config.notify.telegram, entered in the popup) never reaches the Tock page. api.telegram.org is an
+// optional host permission, so updating users aren't asked for it unless they turn Telegram on. `override`
 // ({ token, chatId }) is used by the popup's "Send test" before the settings are enabled.
+const TELEGRAM_ORIGIN = "https://api.telegram.org/*";
+
 async function sendTelegram(text, override) {
   const { config } = await chrome.storage.local.get("config");
   const tg = override || config?.notify?.telegram;
   if (!override && !tg?.enabled) return { ok: false, skipped: true };
   if (!tg?.token || !tg?.chatId) return { ok: false, error: "Bot token and chat ID are required" };
   if (!/^\d+:[\w-]+$/.test(tg.token)) return { ok: false, error: "Bot token looks wrong (expected 123456:ABC…)" };
+  // Optional permission, granted from the popup when Telegram is switched on
+  if (!(await chrome.permissions.contains({ origins: [TELEGRAM_ORIGIN] }))) {
+    return { ok: false, error: "Telegram permission not granted — switch notifications off and on again in the popup" };
+  }
   const res = await fetch(`https://api.telegram.org/bot${tg.token}/sendMessage`, {
     method: "POST",
     headers: { "content-type": "application/json" },

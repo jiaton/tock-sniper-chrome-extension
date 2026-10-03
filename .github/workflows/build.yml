@@ -25,6 +25,7 @@ jobs:
 
       - name: Build ZIP
         run: |
+          rm -f tock-sniper-ext.zip  # start fresh: zip -r would append to an existing archive
           zip -r tock-sniper-ext.zip \
             manifest.json \
             content.js \

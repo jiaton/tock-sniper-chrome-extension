@@ -1,4 +1,4 @@
-# Chrome Web Store listing — Tock Sniper v3.0.0
+# Chrome Web Store listing — Tock Sniper v3.0.1
 
 Copy-paste text for the developer dashboard. Keep it in sync with `manifest.json`.
 
@@ -65,9 +65,9 @@ Used only when the user clicks the toolbar icon while viewing a restaurant on ex
 The extension's purpose is booking on exploretock.com, so its content scripts run only there. content.js shows the countdown/status overlay and, at the release time, either sends Tock's own booking request on the user's behalf (using the user's existing session) or clicks through Tock's booking dialog. page-hook.js runs in the page's main world and records the request headers Tock's own page attaches to its API calls (session, CSRF and build headers), so the extension's booking request is made the same way the site's own button would make it. No data from these pages is sent anywhere except back to exploretock.com.
 ```
 
-**Host permission: https://api.telegram.org/\***
+**Optional host permission: https://api.telegram.org/\*** (`optional_host_permissions` — not requested at install or update)
 ```
-Optional and off by default. If the user enables Telegram notifications and enters their own bot token and chat ID, the background service worker sends short status messages (slot held, bookings opened, monitoring started/ended) to that chat through the Telegram Bot API. No request is made to Telegram unless the user turns this on or presses "Send test".
+Requested at runtime, only when the user switches on Telegram notifications or presses "Send test" in the popup, and only then. With the user's own bot token and chat ID, the background service worker sends short status messages (slot held, bookings opened, monitoring started/ended) to that chat through the Telegram Bot API. Users who never enable Telegram never grant or use this permission.
 ```
 
 ### Remote code

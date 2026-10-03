@@ -60,7 +60,10 @@ tock-sniper-ext/
 ├── content.js             # Per-tab snipe logic (API direct or DOM click)
 ├── background.js          # Keepalive alarm, clears state on arm/disarm, sends Telegram notifications
 ├── icons/                 # 16, 48, 128px icons
-├── .github/workflows/     # CI: builds zip, auto-tags from manifest version
+├── .github/workflows/     # CI: builds a fresh zip, tags + releases v<manifest version> on push to main
+├── scripts/               # generate-icons.js, store-screenshots.html (Chrome Web Store images)
+├── store/                 # listing.md (store text, permission justifications), screenshots
+├── LICENSE                # MIT
 └── AGENTS.md              # This file
 ```
 
@@ -231,8 +234,10 @@ Tabs opened before the extension was (re)loaded have no content script — the p
   Success → checkout. A 429 pauses 10 min (lock 429s persisted ~28 min after a burst on 2026-10-02 while
   offerings kept working). Stops on Disarm. Hidden tabs get timer-throttled by Chrome (≥1 min between checks).
 - **Telegram** (`config.notify.telegram`): content scripts send `{type: "tockSniper:notify", text}` to
-  `background.js`, which POSTs `https://api.telegram.org/bot<token>/sendMessage` (`host_permissions`), so
-  the token never reaches the page. Sent on: lock success / DOM checkout (per target), and once per
+  `background.js`, which POSTs `https://api.telegram.org/bot<token>/sendMessage`, so the token never reaches
+  the page. `api.telegram.org` is an `optional_host_permissions` entry — requested by the popup only when
+  Telegram is switched on or "Send test" is pressed (user gesture), so updates don't trigger a new
+  permission warning (Chrome would otherwise disable the extension until users accept it). Sent on: lock success / DOM checkout (per target), and once per
   restaurant per armed run for monitor start, bookings opened, monitor end (`dedupeKey`
   `<restaurant>:<kind>`; background.js serializes notify messages and records them in `notifySent`,
   cleared on Arm/Disarm). The popup's "Send test" passes `override: {token, chatId}`. Notification failures never

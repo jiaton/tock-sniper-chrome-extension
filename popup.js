@@ -5,6 +5,7 @@ const state = { dates: [], times: [] };
 let armedState = false;
 let savedTimer = null;
 const clampParty = (n) => Math.min(20, Math.max(1, n));
+const TELEGRAM_PERMISSION = { origins: ["https://api.telegram.org/*"] }; // optional host permission
 
 const EXP_SOURCE_HINTS = {
   hybrid: "Locks with your ID from the first request; switches if Tock lists a different experience at release.",
@@ -303,6 +304,12 @@ chrome.storage.local.get(["config", "sniping", "status"], (d) => {
   $("#dateInput").value = state.dates[0] || "";
   updateHints();
   updateExtras();
+  // Enabled earlier but the optional permission is missing (e.g. removed in chrome://extensions)
+  if ($("#tgEnabled").checked) {
+    chrome.permissions.contains(TELEGRAM_PERMISSION).then((ok) => {
+      if (!ok) showTgResult("Permission missing — switch Telegram off and on again.", "err");
+    }, () => {});
+  }
   renderTargets();
   updateButton(d.sniping);
   initActiveTab();
@@ -475,7 +482,30 @@ $("#timeInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#
 
 $("#url").addEventListener("input", () => { syncFieldsFromUrl(); saveConfig(); });
 $("#useTab").addEventListener("click", useActiveTab);
-["#monitorEnabled", "#tgEnabled"].forEach((id) => $(id).addEventListener("change", () => { updateExtras(); saveConfig(); }));
+$("#monitorEnabled").addEventListener("change", () => { updateExtras(); saveConfig(); });
+
+// api.telegram.org is an optional host permission: asked for only when Telegram is switched on
+// (or "Send test" is pressed) — both are user gestures, which chrome.permissions.request needs.
+const requestTelegramPermission = () => chrome.permissions.request(TELEGRAM_PERMISSION).catch(() => false);
+
+function showTgResult(text, cls = "") {
+  $("#tgTestResult").className = cls;
+  $("#tgTestResult").textContent = text;
+}
+
+$("#tgEnabled").addEventListener("change", async (e) => {
+  updateExtras();
+  saveConfig();
+  if (!e.target.checked) return;
+  if (await requestTelegramPermission()) {
+    showTgResult("");
+    return;
+  }
+  e.target.checked = false;
+  updateExtras();
+  saveConfig();
+  showTgResult("Permission to reach api.telegram.org wasn't granted.", "err");
+});
 ["#monitorInterval", "#monitorHours", "#tgToken", "#tgChatId"].forEach((id) => $(id).addEventListener("input", saveConfig));
 // Show the clamped value once the field is left (readConfig clamps what gets saved)
 ["#monitorInterval", "#monitorHours"].forEach((id) => $(id).addEventListener("change", () => {
@@ -485,6 +515,10 @@ $("#useTab").addEventListener("click", useActiveTab);
 }));
 $("#tgTest").addEventListener("click", async () => {
   const out = $("#tgTestResult");
+  if (!(await requestTelegramPermission())) {
+    showTgResult("Permission to reach api.telegram.org wasn't granted.", "err");
+    return;
+  }
   out.className = "";
   out.textContent = "Sending…";
   try {

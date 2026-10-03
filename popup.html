@@ -155,7 +155,7 @@
     </div>
     <label class="field-label" for="releaseTime">Release time</label>
     <input id="releaseTime" type="datetime-local" step="1" />
-    <small>Local clock (NTP-synced). Tabs fire 10ms before this.</small>
+    <small>Local clock (NTP-synced). API tabs start 100ms before this; DOM tabs reload 800ms before.</small>
     <div class="suggest" id="releaseSuggest" hidden>
       <span class="text"><span id="releaseSuggestTime"></span><span class="src" id="releaseSuggestSrc"></span></span>
       <button type="button" id="releasePrefill">Prefill</button>

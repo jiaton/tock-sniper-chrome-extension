@@ -208,7 +208,8 @@ function renderExperienceSuggestions(info) {
     chip.textContent = `${e.id}`;
     const meta = document.createElement("span");
     meta.className = "meta";
-    const sizes = e.partySizes.length ? ` · ${Math.min(...e.partySizes)}–${Math.max(...e.partySizes)}p` : "";
+    const [lo, hi] = [Math.min(...e.partySizes), Math.max(...e.partySizes)];
+    const sizes = !e.partySizes.length ? "" : lo === hi ? ` · ${lo}p` : ` · ${lo}–${hi}p`;
     meta.textContent = `${e.name.length > 28 ? e.name.slice(0, 27) + "…" : e.name}${sizes}`;
     chip.appendChild(meta);
     chip.addEventListener("click", () => {

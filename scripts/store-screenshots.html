@@ -1,0 +1,209 @@
+<!doctype html>
+<!--
+  Chrome Web Store screenshots (1280×800) rendered from the extension's real popup.html / popup.js and
+  the overlay markup in content.js, with a stubbed `chrome` API and fictional demo data.
+
+  Regenerate (from the repo root):
+    python3 -m http.server 8767 --bind 127.0.0.1 &
+    for n in 1 2 3 4 5; do
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars \
+        --window-size=1280,800 --virtual-time-budget=8000 --screenshot=store/screenshot$n.png \
+        "http://127.0.0.1:8767/scripts/store-screenshots.html?shot=$n"
+    done
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Store screenshots</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1280px; height: 800px; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #0f172a; }
+  .stage { position: relative; width: 1280px; height: 800px; background:
+    radial-gradient(900px 500px at 0% 0%, rgba(37,99,235,.14), transparent 60%),
+    radial-gradient(800px 500px at 100% 100%, rgba(22,163,74,.12), transparent 60%), #f5f7fb; }
+  .stage.dark { background: radial-gradient(900px 500px at 0% 0%, rgba(59,130,246,.22), transparent 60%), radial-gradient(800px 500px at 100% 100%, rgba(34,197,94,.12), transparent 60%), #0b0e14; color: #e5e7eb; }
+
+  .copy { position: absolute; left: 64px; top: 92px; width: 430px; }
+  .kicker { font-size: 15px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #2563eb; }
+  .dark .kicker { color: #60a5fa; }
+  .copy h1 { margin: 14px 0 0; font-size: 46px; line-height: 1.08; letter-spacing: -.02em; }
+  .copy p { margin: 18px 0 0; font-size: 19px; line-height: 1.5; color: #475569; }
+  .dark .copy p { color: #9ca3af; }
+  .copy ul { margin: 26px 0 0; padding: 0; list-style: none; }
+  .copy li { position: relative; padding-left: 30px; margin: 12px 0; font-size: 17px; color: #334155; }
+  .dark .copy li { color: #cbd5e1; }
+  .copy li::before { content: "✓"; position: absolute; left: 0; top: 0; width: 20px; height: 20px; border-radius: 50%; background: #dbeafe; color: #2563eb; font-size: 12px; font-weight: 800; display: grid; place-items: center; }
+  .dark .copy li::before { background: #1e3a8a; color: #bfdbfe; }
+
+  /* Generic browser + restaurant page (no third-party branding) */
+  .browser { position: absolute; left: 540px; top: 48px; width: 700px; height: 704px; border-radius: 12px; background: #fff; border: 1px solid #dfe3ea; box-shadow: 0 30px 80px rgba(15,23,42,.18); overflow: hidden; }
+  .chrome-bar { height: 44px; background: #eef1f5; border-bottom: 1px solid #dfe3ea; display: flex; align-items: center; gap: 12px; padding: 0 14px; }
+  .dots { display: flex; gap: 7px; } .dots i { width: 11px; height: 11px; border-radius: 50%; display: block; background: #cbd5e1; }
+  .dots i:nth-child(1) { background: #ef4444; } .dots i:nth-child(2) { background: #f59e0b; } .dots i:nth-child(3) { background: #22c55e; }
+  .addr { flex: 1; height: 28px; border-radius: 14px; background: #fff; border: 1px solid #dde2ea; display: flex; align-items: center; padding: 0 14px; font-size: 13px; color: #64748b; }
+  .ext-icon { width: 26px; height: 26px; border-radius: 6px; background: #fff; border: 1px solid #dde2ea; display: grid; place-items: center; font-size: 15px; }
+  .ext-icon.on { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.18); }
+  .venue { padding: 34px 40px; color: #0f172a; }
+  .hero-img { height: 210px; border-radius: 10px; background: linear-gradient(135deg, #f3d9b1, #e8a87c 45%, #c38d9e); position: relative; overflow: hidden; }
+  .hero-img::after { content: ""; position: absolute; inset: 0; background: radial-gradient(260px 140px at 70% 60%, rgba(255,255,255,.35), transparent 70%); }
+  .venue h2 { margin: 22px 0 4px; font-size: 30px; letter-spacing: -.01em; }
+  .venue .meta { color: #64748b; font-size: 15px; }
+  .venue .notice { margin-top: 20px; padding: 14px 16px; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 14px; color: #334155; line-height: 1.5; }
+  .venue .lines i { display: block; height: 10px; border-radius: 5px; background: #eef1f5; margin-top: 14px; }
+
+  .popup-frame { position: absolute; border: 0; width: 360px; border-radius: 10px; box-shadow: 0 24px 60px rgba(15,23,42,.28); background: transparent; }
+
+  .notes { position: absolute; left: 64px; bottom: 64px; width: 430px; }
+  .note { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 14px; margin-top: 10px; box-shadow: 0 10px 30px rgba(15,23,42,.08); font-size: 14px; line-height: 1.45; color: #0f172a; white-space: pre-line; }
+  .note .from { font-size: 12px; font-weight: 700; color: #64748b; margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<div class="stage" id="stage"></div>
+
+<script>
+// ── Fictional demo data ──
+const RESTAURANT = { slug: "saffron-and-salt", name: "Saffron & Salt", city: "San Francisco, CA" };
+const BASE_URL = `https://www.exploretock.com/${RESTAURANT.slug}`;
+const EXPERIENCES = [
+  { id: 712345, name: "Autumn Tasting Menu", partySizes: [1, 2, 3, 4, 5, 6] },
+  { id: 712346, name: "Chef's Counter Omakase", partySizes: [2] },
+];
+const RELEASE = { text: "New reservations will be released on October 9, 2026 at 8:00 PM PDT", date: "October 9, 2026", time: "8:00 PM", tz: "PDT", source: "tock" };
+const shot = Number(new URLSearchParams(location.search).get("shot") || 1);
+
+const SHOTS = {
+  1: { kicker: "Set up in seconds", title: "Point it at the restaurant. It reads the rest.",
+       body: "Click “Use this page” on any restaurant. Tock Sniper lists its experiences and prefills the release time.",
+       bullets: ["Experience IDs detected from the page", "Release time converted to your time zone", "One tab per date × time"],
+       popup: { config: { url: "", partySize: 4, releaseTime: "2026-10-09T19:45:00", prefTimes: ["6:00 PM", "8:00 PM"], dates: ["2026-10-16", "2026-10-17"], snipeMode: "api", expSource: "hybrid", experienceId: null },
+                useTab: true, pick: 712345, prefill: true }, ext: true },
+  2: { kicker: "Fires at the exact moment", title: "Densest right at release. Calm everywhere else.",
+       body: "Requests are scheduled around the release instant — 5 ms apart within ±40 ms, sparser outward — and stop on sold-out or rate limits.",
+       bullets: ["Locks the slot directly — no page reload", "Auto-corrects a stale experience ID", "Draggable live overlay"],
+       overlay: "countdown" },
+  3: { kicker: "Slot held", title: "Straight to checkout — you just pay.",
+       body: "The first successful lock wins and the tab jumps to checkout. Every request is counted, so you know exactly what was sent.",
+       bullets: ["API, DOM-click or both, side by side", "Stops at the first 429", "Single attempt if you open it late"],
+       overlay: "success" },
+  4: { kicker: "Release delayed?", title: "Keep watching. Get pinged when it opens.",
+       body: "Optional monitor keeps checking a restaurant that hasn't opened yet and books as soon as it does. Optional Telegram messages to your own bot.",
+       bullets: ["Polls lightly; backs off 10 min after a 429", "One message per restaurant, not per tab", "Token stays in your browser"],
+       popup: { config: { url: BASE_URL, partySize: 4, releaseTime: "2026-10-09T20:00:00", prefTimes: ["8:00 PM"], dates: ["2026-10-17"], snipeMode: "api", expSource: "hybrid", experienceId: 712345,
+                          monitor: { enabled: true, intervalSec: 20, hours: 6 }, notify: { telegram: { enabled: true, token: "123456789:demo-token-not-real", chatId: "123456789" } } },
+                extras: true, scroll: true },
+       notes: ["🔓 Bookings just opened at Saffron & Salt.\nTrying to lock: 2026-10-17 8:00 PM (4 guests)…", "🎉 Locked Saffron & Salt · 2026-10-17 8:00 PM · 4 guests!\nComplete checkout within ~10 min in the browser."] },
+  5: { kicker: "Built for release night", title: "Every date and time you want, at once.",
+       body: "Add dates and times as chips, pick API, DOM or both, and arm. Dark mode included.",
+       bullets: ["Date × time targets", "Manual, auto or hybrid experience ID", "Auto-saves as you type"],
+       popup: { config: { url: BASE_URL, partySize: 2, releaseTime: "2026-10-09T20:00:00", prefTimes: ["6:00 PM", "8:00 PM"], dates: ["2026-10-16", "2026-10-17"], snipeMode: "both", expSource: "hybrid", experienceId: 712345 }, scroll: true },
+       dark: true },
+};
+
+const s = SHOTS[shot];
+const stage = document.getElementById("stage");
+if (s.dark) stage.classList.add("dark");
+stage.insertAdjacentHTML("beforeend", `
+  <div class="copy"><div class="kicker">${s.kicker}</div><h1>${s.title}</h1><p>${s.body}</p>
+  <ul>${s.bullets.map((b) => `<li>${b}</li>`).join("")}</ul></div>`);
+
+if (s.notes) {
+  stage.querySelector(".copy").style.top = "72px";
+  stage.insertAdjacentHTML("beforeend", `<div class="notes">${s.notes.map((n) => `<div class="note"><div class="from">Your Telegram bot</div>${n}</div>`).join("")}</div>`);
+}
+
+if (!s.dark) {
+  stage.insertAdjacentHTML("beforeend", `
+    <div class="browser">
+      <div class="chrome-bar"><div class="dots"><i></i><i></i><i></i></div>
+        <div class="addr">exploretock.com/${RESTAURANT.slug}</div><div class="ext-icon ${s.ext ? "on" : ""}">🎯</div></div>
+      <div class="venue"><div class="hero-img"></div>
+        <h2>${RESTAURANT.name}</h2><div class="meta">${RESTAURANT.city} · Contemporary · $$$$</div>
+        <div class="notice">Reservations are unavailable.<br>${RELEASE.text}.</div>
+        <div class="lines"><i style="width:92%"></i><i style="width:84%"></i><i style="width:70%"></i></div></div>
+    </div>`);
+}
+
+// ── Real popup, with a stubbed chrome API ──
+async function renderPopup(opts) {
+  let html = await (await fetch("../popup.html", { cache: "no-store" })).text();
+  if (s.dark) html = html.replace("@media (prefers-color-scheme: dark) {", "@media all {").replace("@media (prefers-color-scheme: dark) { input::-webkit-calendar-picker-indicator", "@media all { input::-webkit-calendar-picker-indicator");
+  const pageInfo = { url: `${BASE_URL}?tock_source=tock`, currentExperienceId: null, offeringsError: null, experiences: EXPERIENCES, release: RELEASE };
+  const stub = `<base href="/"><script>
+    const __store = ${JSON.stringify({ config: opts.config })};
+    window.chrome = { storage: { local: {
+        get(keys, cb) { const r = {}; [].concat(keys).forEach((k) => { if (k in __store) r[k] = __store[k]; }); cb && cb(r); return Promise.resolve(r); },
+        set(o, cb) { Object.assign(__store, o); cb && cb(); return Promise.resolve(); } },
+        onChanged: { addListener() {} } },
+      runtime: { sendMessage: async () => ({ ok: true }) },
+      tabs: { create() {}, query: async () => [{ id: 1, url: ${JSON.stringify(opts.useTab ? pageInfo.url : "https://example.com/")} }],
+              sendMessage: async () => (${JSON.stringify(pageInfo)}) } };
+  <\/script>`;
+  html = html.replace("<head>", "<head>" + stub);
+  const frame = document.createElement("iframe");
+  frame.className = "popup-frame";
+  frame.srcdoc = html;
+  stage.appendChild(frame);
+  await new Promise((r) => frame.addEventListener("load", r, { once: true }));
+  const doc = frame.contentDocument, win = frame.contentWindow;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  await wait(150);
+  if (opts.useTab) {
+    doc.querySelector("#useTab").click();
+    await wait(200);
+    if (opts.pick) [...doc.querySelectorAll("#expSuggestions .chip")].find((c) => c.textContent.startsWith(String(opts.pick)))?.click();
+    await wait(50);
+  }
+  if (opts.extras) doc.querySelector("#extras").open = true;
+  const full = doc.documentElement.scrollHeight;
+  const maxH = s.dark ? 760 : 704 - 44 - 8;
+  frame.style.height = Math.min(full, maxH) + "px";
+  if (s.dark) { frame.style.left = "800px"; frame.style.top = "20px"; }
+  else { frame.style.left = (540 + 700 - 360 - 14) + "px"; frame.style.top = (48 + 44 + 6) + "px"; }
+  if (opts.scroll) win.scrollTo(0, full);
+}
+
+// ── Real overlay markup from content.js ──
+async function renderOverlay(kind) {
+  const src = await (await fetch("../content.js", { cache: "no-store" })).text();
+  const code = src.slice(src.indexOf("function createOverlay() {"), src.indexOf("function setStatus("));
+  // createOverlay assigns the global `overlay`
+  new Function("ctx", "let overlay;" + code + "; createOverlay(); return overlay;")();
+  const el = document.getElementById("tock-sniper-overlay");
+  // Scaled up so the overlay is readable at store-screenshot size
+  el.style.left = "760px"; el.style.top = kind === "countdown" ? "250px" : "150px"; el.style.right = "auto";
+  el.style.transform = "scale(1.3)"; el.style.transformOrigin = "top left";
+  const T = new Date("2026-10-09T20:00:00");
+  const fmt = (offsetMs) => { const d = new Date(T.getTime() + offsetMs); return d.toTimeString().slice(0, 8) + "." + String(d.getMilliseconds()).padStart(3, "0"); };
+  const set = (id, v) => (document.getElementById(id).textContent = v);
+  set("ts-date", "2026-10-17 8:00 PM [⚡API]");
+  const status = document.getElementById("ts-status");
+  const log = document.getElementById("ts-log");
+  const add = (off, msg, type = "info") => log.insertAdjacentHTML("beforeend", `<div class="ts-entry ${type}"><span class="ts-time">${fmt(off)}</span>${msg}</div>`);
+  if (kind === "countdown") {
+    set("ts-local", fmt(-12346)); set("ts-countdown", "00:12.346");
+    status.className = "ts-status waiting"; status.textContent = "⏰ API in 00:12.346";
+    add(-1800000, "🔑 Headers: session ✓ auth ✓ csrf ✓ fp ✓ build servingstack-2026-09-30RC03-00");
+    add(-1800000, "Waiting 29:47.654 — burst runs 100ms before to 3000ms after release, densest at release");
+  } else {
+    set("ts-local", fmt(184)); set("ts-countdown", "-00:00.184");
+    status.className = "ts-status success"; status.textContent = "🛒 Slot locked! Loading checkout...";
+    add(-300, "🔑 Headers: session ✓ auth ✓ csrf ✓ fp ✓ build servingstack-2026-09-30RC03-00");
+    add(-299, "🚀 API lock: 2026-10-17T20:00, 4 guests, exp 712345 [hybrid]");
+    add(-298, "🗓️ 42 sends planned, 100ms before to 3000ms after release");
+    add(52, "📋 Offerings: 712345 Autumn Tasting Menu (1/2/3/4/5/6p); 712346 Chef's Counter Omakase (2p)");
+    add(61, "⏳ #4: 410 Unfortunately, someone else just selected this and it is no longer available.");
+    add(183, "✅ API lock success! Attempt 19: 2026-10-17T20:00 | Autumn Tasting Menu", "success");
+    add(184, "📊 Sent 19 lock, 4 offerings → 410×12 in 302ms");
+  }
+  log.scrollTop = log.scrollHeight;
+}
+
+(async () => {
+  if (s.popup) await renderPopup(s.popup);
+  if (s.overlay) await renderOverlay(s.overlay);
+  document.title = "ready";
+})();
+</script>
+</body>
+</html>

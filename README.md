@@ -8,6 +8,11 @@ Auto-grab reservations on [Tock](https://www.exploretock.com) the instant they d
 
 [Chrome Web Store](https://chromewebstore.google.com/detail/tock-sniper/ppgobdppcdhckikdbajbhlmohfmhpioo) · [Releases](../../releases)
 
+![Tock Sniper demo: "Use this page" detects the experience and release time, arm, the overlay counts down, the slot is locked at the release instant, and the tab lands on checkout](docs/demo.gif)
+
+<sub>Simulated with a fictional restaurant — the popup and overlay are the extension's real UI
+(`scripts/demo.html`, recorded with `node scripts/record-demo.mjs`).</sub>
+
 ## How It Works
 
 1. **Set your target** — restaurant URL (or open the restaurant and click **Use this page**), party size, dates and times

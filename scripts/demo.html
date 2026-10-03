@@ -1,0 +1,263 @@
+<!doctype html>
+<!--
+  README demo animation (docs/demo.gif). Drives the extension's real popup (popup.html + popup.js with a
+  stubbed `chrome` API) and the real overlay markup from content.js through a scripted timeline, with a
+  fictional restaurant. Nothing talks to Tock.
+
+  The timeline runs on a virtual clock: scripts/record-demo.mjs calls window.demoStep(ms) and screenshots
+  each frame, so the output doesn't depend on how fast the machine renders. Open
+  http://127.0.0.1:<port>/scripts/demo.html?play to watch it in real time.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Tock Sniper demo</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 960px; height: 600px; overflow: hidden; background: #e9edf3; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #0f172a; }
+  .browser { position: absolute; left: 0; top: 0; width: 960px; height: 548px; background: #fff; overflow: hidden; }
+  .bar { height: 42px; background: #eef1f5; border-bottom: 1px solid #dfe3ea; display: flex; align-items: center; gap: 12px; padding: 0 14px; }
+  .dots { display: flex; gap: 7px; } .dots i { width: 11px; height: 11px; border-radius: 50%; display: block; }
+  .dots i:nth-child(1) { background: #ef4444; } .dots i:nth-child(2) { background: #f59e0b; } .dots i:nth-child(3) { background: #22c55e; }
+  .addr { flex: 1; height: 26px; border-radius: 13px; background: #fff; border: 1px solid #dde2ea; display: flex; align-items: center; padding: 0 14px; font-size: 12.5px; color: #64748b; }
+  #extIcon { width: 26px; height: 26px; border-radius: 6px; background: #fff; border: 1px solid #dde2ea; display: grid; place-items: center; font-size: 15px; transition: box-shadow .15s; }
+  #extIcon.on { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.2); }
+
+  .page { position: absolute; top: 42px; left: 0; right: 0; bottom: 0; padding: 26px 34px; }
+  .hero { height: 170px; border-radius: 10px; background: linear-gradient(135deg, #f3d9b1, #e8a87c 45%, #c38d9e); }
+  .page h2 { margin: 18px 0 2px; font-size: 26px; letter-spacing: -.01em; }
+  .meta { color: #64748b; font-size: 14px; }
+  .notice { margin-top: 16px; width: 470px; padding: 12px 14px; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 13px; color: #334155; line-height: 1.5; }
+  .lines i { display: block; height: 9px; border-radius: 5px; background: #eef1f5; margin-top: 12px; }
+
+  .checkout { display: none; }
+  .checkout h3 { margin: 6px 0 4px; font-size: 24px; }
+  .hold { display: inline-block; margin: 10px 0 16px; padding: 6px 10px; border-radius: 6px; background: #fef3c7; color: #92400e; font-size: 13px; font-weight: 600; }
+  .summary { width: 440px; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; font-size: 14px; line-height: 1.9; }
+  .summary b { display: inline-block; width: 110px; color: #64748b; font-weight: 500; }
+  .pay { margin-top: 16px; width: 440px; }
+  .pay i { display: block; height: 34px; border-radius: 7px; border: 1px solid #e2e8f0; margin-top: 8px; }
+  .pay button { margin-top: 12px; width: 100%; height: 40px; border: 0; border-radius: 8px; background: #111827; color: #fff; font: inherit; font-weight: 600; }
+
+  #popup { position: absolute; right: 10px; top: 46px; width: 360px; height: 496px; border: 0; border-radius: 10px; box-shadow: 0 18px 50px rgba(15,23,42,.3); opacity: 0; transform: translateY(-6px); transition: opacity .2s, transform .2s; pointer-events: none; }
+  #popup.open { opacity: 1; transform: none; }
+
+  .caption { position: absolute; left: 0; right: 0; bottom: 0; height: 52px; display: flex; align-items: center; gap: 12px; padding: 0 22px; background: #0f172a; color: #e2e8f0; font-size: 16px; font-weight: 600; }
+  .caption .step { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: #2563eb; color: #fff; font-size: 13px; }
+  .caption .note { margin-left: auto; font-size: 11.5px; font-weight: 500; color: #64748b; }
+
+  #cursor { position: absolute; left: 0; top: 0; width: 22px; height: 22px; z-index: 1000001; pointer-events: none; filter: drop-shadow(0 1px 2px rgba(0,0,0,.35)); }
+  .ripple { position: absolute; z-index: 1000000; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%; border: 3px solid rgba(37,99,235,.7); pointer-events: none; }
+</style>
+</head>
+<body>
+<div class="browser">
+  <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
+    <div class="addr" id="addr">exploretock.com/saffron-and-salt</div><div id="extIcon">🎯</div></div>
+  <div class="page" id="venue">
+    <div class="hero"></div>
+    <h2>Saffron &amp; Salt</h2><div class="meta">San Francisco, CA · Contemporary · $$$$</div>
+    <div class="notice">Reservations are unavailable.<br>New reservations will be released on October 9, 2026 at 8:00 PM PDT.</div>
+    <div class="lines"><i style="width:60%"></i><i style="width:52%"></i></div>
+  </div>
+  <div class="page checkout" id="checkout">
+    <div class="meta">Checkout</div>
+    <h3>Saffron &amp; Salt — Autumn Tasting Menu</h3>
+    <div class="hold">⏳ Held for you · complete within 9:58</div>
+    <div class="summary"><div><b>Date</b>Sat, Oct 17, 2026</div><div><b>Time</b>8:00 PM</div><div><b>Party</b>4 guests</div></div>
+    <div class="pay"><i></i><i></i><button>Pay &amp; confirm</button></div>
+  </div>
+</div>
+<iframe id="popup"></iframe>
+<div class="caption"><span class="step" id="capStep">1</span><span id="capText"></span><span class="note">Simulated demo · fictional restaurant</span></div>
+<svg id="cursor" viewBox="0 0 22 22"><path d="M3 2 L3 18 L7.5 13.8 L10.6 20.5 L13.4 19.2 L10.4 12.6 L16.5 12.6 Z" fill="#fff" stroke="#111" stroke-width="1.4" stroke-linejoin="round"/></svg>
+
+<script>
+const BASE = "https://www.exploretock.com/saffron-and-salt";
+const EXPERIENCES = [
+  { id: 712345, name: "Autumn Tasting Menu", partySizes: [1, 2, 3, 4, 5, 6] },
+  { id: 712346, name: "Chef's Counter Omakase", partySizes: [2] },
+];
+const RELEASE = { text: "New reservations will be released on October 9, 2026 at 8:00 PM PDT", date: "October 9, 2026", time: "8:00 PM", tz: "PDT", source: "tock" };
+const CONFIG = { url: "", partySize: 2, releaseTime: "2026-10-09T19:45:00", prefTimes: ["6:00 PM"], dates: ["2026-10-17"], snipeMode: "api", expSource: "hybrid", experienceId: null };
+
+const $ = (s) => document.querySelector(s);
+const frame = $("#popup");
+let pdoc, pwin, overlay;
+let now = 0;                      // virtual time (ms)
+const RELEASE_AT = 12400;         // virtual time of the release instant in this demo
+let schedule = [];                // send offsets from content.js's API_SCHEDULE
+
+// ── Setup: real popup + real overlay code ──
+async function setup() {
+  let html = await (await fetch("../popup.html", { cache: "no-store" })).text();
+  const pageInfo = { url: `${BASE}?tock_source=tock`, currentExperienceId: null, offeringsError: null, experiences: EXPERIENCES, release: RELEASE };
+  html = html.replace("<head>", `<head><base href="/"><script>
+    const __store = ${JSON.stringify({ config: CONFIG })};
+    window.chrome = { storage: { local: {
+        get(k, cb) { const r = {}; [].concat(k).forEach((x) => { if (x in __store) r[x] = __store[x]; }); cb && cb(r); return Promise.resolve(r); },
+        set(o, cb) { Object.assign(__store, o); cb && cb(); return Promise.resolve(); } }, onChanged: { addListener() {} } },
+      permissions: { contains: async () => true, request: async () => true },
+      runtime: { sendMessage: async () => ({ ok: true }) },
+      tabs: { create() {}, query: async () => [{ id: 1, url: ${JSON.stringify(pageInfo.url)} }], sendMessage: async () => (${JSON.stringify(pageInfo)}) } };
+  <\/script><style>html { scroll-behavior: auto; }</style>`);
+  frame.srcdoc = html;
+  await new Promise((r) => frame.addEventListener("load", r, { once: true }));
+  pdoc = frame.contentDocument; pwin = frame.contentWindow;
+  await wait(100);
+  pdoc.querySelector("#timeInput").value = "20:00";
+
+  const src = await (await fetch("../content.js", { cache: "no-store" })).text();
+  const overlayCode = src.slice(src.indexOf("function createOverlay() {"), src.indexOf("function setStatus("));
+  overlay = new Function("let overlay;" + overlayCode + "; createOverlay(); return overlay;")();
+  overlay.style.cssText += ";left:600px;top:58px;right:auto;display:none;";
+  const scheduleCode = src.slice(src.indexOf("const API_SCHEDULE"), src.indexOf("const API_MAX_429"));
+  const sched = new Function(scheduleCode + "; return API_SCHEDULE;")();
+  for (let off = sched[0].from; off <= 600; ) {
+    schedule.push(off);
+    let every = sched[0].every; for (const row of sched) if (off >= row.from) every = row.every;
+    off += every;
+  }
+}
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ── Helpers ──
+function caption(step, text) { $("#capStep").textContent = step; $("#capText").textContent = text; }
+function popupPoint(sel, dx = 0, dy = 0) {
+  const el = typeof sel === "string" ? pdoc.querySelector(sel) : sel;
+  const fr = frame.getBoundingClientRect(), r = el.getBoundingClientRect();
+  return { x: fr.left + r.left + r.width / 2 + dx, y: fr.top + r.top + r.height / 2 + dy };
+}
+const chip = (id) => [...pdoc.querySelectorAll("#expSuggestions .chip")].find((c) => c.textContent.startsWith(String(id)));
+
+// Cursor: moves are {start, end, to: () => point, scrollTo?: () => scrollY}; position interpolated with easing
+let cursor = { x: 480, y: 330 };
+const moves = [];
+const ripples = [];
+function moveTo(start, dur, to, scrollToEl) { moves.push({ start, end: start + dur, to, scrollToEl }); }
+const ease = (p) => (p < .5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2);
+
+function updateCursor() {
+  for (const m of moves) {
+    if (now < m.start || m.done) continue;
+    if (!m.from) {
+      m.from = { ...cursor };
+      if (m.scrollToEl) {
+        const el = pdoc.querySelector(m.scrollToEl);
+        m.scrollFrom = pwin.scrollY;
+        m.scrollTarget = Math.max(0, Math.min(pdoc.documentElement.scrollHeight - pwin.innerHeight, pwin.scrollY + el.getBoundingClientRect().top - pwin.innerHeight / 2));
+      }
+    }
+    const p = ease(Math.min(1, (now - m.start) / (m.end - m.start)));
+    if (m.scrollToEl) pwin.scrollTo(0, m.scrollFrom + (m.scrollTarget - m.scrollFrom) * p);
+    const target = m.to();
+    cursor = { x: m.from.x + (target.x - m.from.x) * p, y: m.from.y + (target.y - m.from.y) * p };
+    if (p >= 1) m.done = true;
+  }
+  const c = $("#cursor");
+  c.style.transform = `translate(${cursor.x - 3}px, ${cursor.y - 2}px)`;
+  for (const r of ripples) {
+    const p = (now - r.t) / 350;
+    r.el.style.display = p >= 0 && p <= 1 ? "block" : "none";
+    if (p >= 0 && p <= 1) { r.el.style.left = r.x + "px"; r.el.style.top = r.y + "px"; r.el.style.transform = `scale(${.4 + p})`; r.el.style.opacity = 1 - p; }
+  }
+}
+function ripple(t) { const el = document.createElement("div"); el.className = "ripple"; el.style.display = "none"; document.body.appendChild(el); ripples.push({ t, el, get x() { return this._x; }, get y() { return this._y; } }); return ripples.at(-1); }
+function clickAt(t, fn) {
+  const r = ripple(t);
+  events.push({ t, fn: async () => { r._x = cursor.x; r._y = cursor.y; await fn(); } });
+}
+
+// ── Overlay rendering (the overlay's look is real; its numbers are simulated) ──
+const fmt = (ms) => { const d = new Date(new Date("2026-10-09T20:00:00").getTime() + ms); return d.toTimeString().slice(0, 8) + "." + String(d.getMilliseconds()).padStart(3, "0"); };
+const cd = (ms) => { const s = ms < 0 ? "-" : ""; ms = Math.abs(ms); return `${s}${String(Math.floor(ms / 60000)).padStart(2, "0")}:${String(Math.floor(ms % 60000 / 1000)).padStart(2, "0")}.${String(Math.floor(ms % 1000)).padStart(3, "0")}`; };
+const logLines = [];
+function overlayLog(t, msg, type = "info") { logLines.push({ t, msg, type }); }
+let success = false, atCheckout = false;
+function renderOverlay() {
+  if (overlay.style.display === "none") return;
+  const rel = now - RELEASE_AT;
+  overlay.querySelector("#ts-date").textContent = "2026-10-17 8:00 PM [⚡API]";
+  overlay.querySelector("#ts-local").textContent = fmt(rel);
+  overlay.querySelector("#ts-countdown").textContent = cd(-rel);
+  const st = overlay.querySelector("#ts-status");
+  const sent = schedule.filter((o) => o <= rel).length;
+  if (atCheckout) { st.className = "ts-status success"; st.textContent = "🛒 CHECKOUT — Complete payment!"; }
+  else if (success) { st.className = "ts-status success"; st.textContent = "🛒 Slot locked! Loading checkout..."; }
+  else if (rel < -100) { st.className = "ts-status waiting"; st.textContent = `⏰ API in ${cd(-rel)}`; }
+  else { st.className = "ts-status running"; st.textContent = `🎯 Sniping… ${sent} lock → 410×${Math.max(0, sent - 7)}`; }
+  const log = overlay.querySelector("#ts-log");
+  const shown = logLines.filter((l) => l.t <= now);
+  if (log.childElementCount !== shown.length) {
+    log.innerHTML = shown.map((l) => `<div class="ts-entry ${l.type}"><span class="ts-time">${fmt(l.t - RELEASE_AT)}</span>${l.msg}</div>`).join("");
+    log.scrollTop = log.scrollHeight;
+  }
+}
+
+// ── Timeline ──
+const events = [];
+const at = (t, fn) => events.push({ t, fn });
+
+function buildTimeline() {
+  at(0, () => caption(1, "Open the restaurant on Tock, then the extension"));
+  moveTo(300, 900, () => { const r = $("#extIcon").getBoundingClientRect(); return { x: r.left + 13, y: r.top + 13 }; });
+  clickAt(1300, () => { $("#extIcon").classList.add("on"); frame.classList.add("open"); });
+
+  at(1700, () => caption(2, "“Use this page” finds the experiences and the release time"));
+  moveTo(1800, 600, () => popupPoint("#useTab"));
+  clickAt(2500, async () => { pdoc.querySelector("#useTab").click(); await wait(40); });
+  moveTo(3000, 600, () => popupPoint(chip(712345), -40), null);
+  clickAt(3700, () => chip(712345).click());
+  moveTo(4100, 800, () => popupPoint("#releasePrefill"), "#releasePrefill");
+  clickAt(5000, () => pdoc.querySelector("#releasePrefill").click());
+
+  at(5400, () => caption(3, "Party size, dates and times — saved as you go"));
+  moveTo(5500, 700, () => popupPoint("#partyPlus"), "#partyPlus");
+  clickAt(6300, () => pdoc.querySelector("#partyPlus").click());
+  clickAt(6600, () => pdoc.querySelector("#partyPlus").click());
+  moveTo(6900, 700, () => popupPoint("#addTime"), "#timeChips");
+  clickAt(7700, () => pdoc.querySelector("#addTime").click());
+
+  at(8000, () => caption(4, "Arm — each tab counts down to the release instant"));
+  moveTo(8000, 600, () => popupPoint("#startBtn"), "#startBtn");
+  clickAt(8700, () => {
+    frame.classList.remove("open"); $("#extIcon").classList.remove("on");
+    overlay.style.display = "block";
+    overlayLog(8750, "🔑 Headers: session ✓ auth ✓ csrf ✓ fp ✓ build servingstack-2026-09-30RC03-00");
+    overlayLog(8760, "🚀 API lock: 2026-10-17T20:00, 4 guests, exp 712345 [hybrid]");
+    overlayLog(8770, "Waiting 00:03.530 — burst runs 100ms before to 3000ms after release, densest at release");
+  });
+  moveTo(9000, 900, () => ({ x: 470, y: 470 }));
+  at(RELEASE_AT - 100, () => { caption(4, "Requests packed around the release instant (5 ms apart within ±40 ms)"); overlayLog(RELEASE_AT - 100, "🗓️ 42 sends planned, 100ms before to 3000ms after release"); });
+  at(RELEASE_AT + 60, () => overlayLog(RELEASE_AT + 60, "⏳ #3: 410 Unfortunately, someone else just selected this and it is no longer available."));
+  at(RELEASE_AT + 180, () => { success = true; overlayLog(RELEASE_AT + 180, "✅ API lock success! Attempt 19: 2026-10-17T20:00 | Autumn Tasting Menu", "success"); overlayLog(RELEASE_AT + 182, "📊 Sent 19 lock, 4 offerings → 410×12 in 282ms"); });
+  at(RELEASE_AT + 1300, () => {
+    caption(5, "Slot held → checkout. You finish the payment.");
+    $("#venue").style.display = "none"; $("#checkout").style.display = "block";
+    $("#addr").textContent = "exploretock.com/saffron-and-salt/checkout/confirm-purchase";
+    atCheckout = true;
+  });
+  events.sort((a, b) => a.t - b.t);
+}
+
+// Advance the virtual clock by dt ms (one frame) and run everything due.
+window.demoStep = async (dt) => {
+  now += dt;
+  while (events.length && events[0].t <= now) await events.shift().fn();
+  updateCursor();
+  renderOverlay();
+  await wait(15); // let popup.js promises and layout settle before the screenshot
+};
+window.demoDuration = RELEASE_AT + 3200;
+
+window.demoReady = (async () => {
+  await setup();
+  buildTimeline();
+  await window.demoStep(0);
+  if (new URLSearchParams(location.search).has("play")) {
+    const id = setInterval(async () => { if (now >= window.demoDuration) clearInterval(id); else await window.demoStep(1000 / 30); }, 1000 / 30);
+  }
+})();
+</script>
+</body>
+</html>

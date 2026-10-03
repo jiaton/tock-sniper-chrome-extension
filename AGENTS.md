@@ -11,7 +11,7 @@ popup.js (config UI)
     │
     ├── Saves config to chrome.storage.local
     │   { url, partySize, releaseTime, prefTimes, snipeMode, experienceId, expSource, dates, targets[],
-    │     monitor: { enabled, intervalSec, hours }, notify: { telegram: { enabled, token, chatId } } }
+    │     monitor: { enabled, intervalSec, hours, flexMinutes }, notify: { telegram: { enabled, token, chatId } } }
     │
     └── On "Arm": builds targets[], opens one tab per target with ?_tidx=N
                   Each target has: { date, time, experienceId, mode, url }
@@ -181,7 +181,7 @@ Handled automatically by Tock's frontend when checkout page loads.
 |----------|--------|---------|
 | `/api/consumer/offerings` | POST | Experience list + open dates/times (see below) |
 | `/api/consumer/offerings/preview?endDate=` | GET | 403 for consumers |
-| `/api/consumer/calendar/full/v2` | POST | Full calendar availability (3.6MB) |
+| `/api/consumer/calendar/full/v2` | POST | Seats per date/time/table size (see below) |
 | `/api/ticket/locks` | GET | Check current locks for session |
 | `/api/ticket/price/consumer` | POST | Calculate price, finalize cart |
 
@@ -196,6 +196,19 @@ Response: f1 { f1 { field 60249 {            // ConsumerOfferings
 Before a venue releases, the Offering list is empty — the experience ID cannot be known ahead of time.
 Experience IDs are per menu/season (e.g. "2026 October Dinner"), so a manually saved ID goes stale.
 The full proto schema is embedded as JSON in `/static/servingstack-*/explore.js`.
+
+### Calendar (seats per time)
+```
+Request:  same empty field 60331 {} as offerings
+Response: f1 { f1 { field 60686 {                // ConsumerFullCalendarV2
+            f1: map<businessDay, { f1: map<date, { f2: repeated CalendarTicketGroup }> }>
+          } } }
+CalendarTicketGroup: f1 date, f3 time "HH:MM", f4 numTickets, f5 availableTickets,
+                     f9 minPurchaseSize, f19 maxPurchaseSize, f13 repeated { f1 ticketTypeId = experience ID }
+```
+One group per table/counter configuration, so a time appears several times. A party of N can book a time when
+some group has `available ≥ N` and `min ≤ N ≤ max` — this matched Tock's own dialog (YUJI, 2026-10-03).
+~12KB for one experience over two weeks; Tock's frontend requests it on every page load.
 
 ### Protobuf Wire Format
 Messages use varint-encoded tags: `(field_number << 3) | wire_type`
@@ -231,8 +244,11 @@ Tabs opened before the extension was (re)loaded have no content script — the p
 ## Monitor & Telegram (popup → "Monitor & notifications", both off by default)
 - **Monitor** (`config.monitor`, API tabs): when the release snipe fails (not open yet, sold out, window
   over), keep checking every `intervalSec` (±20% jitter) for `hours`. Each check polls offerings only;
-  once the venue lists experiences, it also tries one lock (listed experience, preferring the manual ID).
-  Success → checkout. A 429 pauses 10 min (lock 429s persisted ~28 min after a burst on 2026-10-02 while
+  once the venue lists experiences, it also reads the calendar and logs the open times for the target date
+  (when they change). It locks only a time with a table for the party: the target time, else the closest
+  open time within `±flexMinutes` (default 60; 0 = exact only). If the calendar can't be read it just tries
+  the target time. Offerings answering 400 "Reservations are currently unavailable" after being open is
+  logged as "closed again" (seen 2026-10-03: a venue opened for ~1 min). Success → checkout. A 429 pauses 10 min (lock 429s persisted ~28 min after a burst on 2026-10-02 while
   offerings kept working). Stops on Disarm. Hidden tabs get timer-throttled by Chrome (≥1 min between checks).
 - **Telegram** (`config.notify.telegram`): content scripts send `{type: "tockSniper:notify", text}` to
   `background.js`, which POSTs `https://api.telegram.org/bot<token>/sendMessage`, so the token never reaches
@@ -243,6 +259,12 @@ Tabs opened before the extension was (re)loaded have no content script — the p
   `<restaurant>:<kind>`; background.js serializes notify messages and records them in `notifySent`,
   cleared on Arm/Disarm). The popup's "Send test" passes `override: {token, chatId}`. Notification failures never
   block booking. The token is stored in `chrome.storage.local` only — never commit one.
+
+## Activity log
+`content.js`'s `log()` also sends every overlay line to `background.js` (`{type: "tockSniper:log", entry: {t, venue,
+target, level, msg}}`), which appends it to `chrome.storage.local.activityLog` (newest 5000, batched writes so tabs
+don't overwrite each other). Kept across runs and reloads. The popup's "Export log" (Monitor & notifications)
+downloads it as a text file; "Clear" deletes it.
 
 ## Usage
 1. Click extension icon

@@ -37,6 +37,9 @@ const FALLBACK_BUILD_NUMBER = "servingstack-2026-09-30RC03-00";
 // one lock per check. Lock 429s were still being returned ~28 min after a burst (2026-10-02) while
 // offerings kept answering, so lock is only tried once the venue lists experiences.
 const MONITOR_429_BACKOFF_MS = 10 * 60 * 1000;
+// Once open, each check also reads the calendar (seats per time) and locks only a time that has a
+// table for the party: the target time, else the closest one within ±flexMinutes (config.monitor).
+const MONITOR_DEFAULT_FLEX_MIN = 60;
 
 // The 16-px service-bell icon (scripts/icon.mjs), inlined: an <img> of the extension's own PNG would
 // need web_accessible_resources, which would expose it to every site.
@@ -178,7 +181,19 @@ const log = (msg, type = "info") => {
   const prefix = myDate ? `[${myDate}]` : "[TockSniper]";
   console.log(`${prefix} ${msg}`);
   addLog(msg, type);
+  persistLog(msg, type);
 };
+
+// Every overlay line is also kept in chrome.storage.local (activityLog, via background.js) so it
+// survives reloads/closed tabs and can be exported from the popup. Never throws.
+function persistLog(msg, type) {
+  try {
+    chrome.runtime.sendMessage({
+      type: "tockSniper:log",
+      entry: { t: Date.now(), venue: location.pathname.split("/")[1] || "", target: myTarget ? targetLabel(myTarget) : "", level: type, msg },
+    }).catch(() => {});
+  } catch {}
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const nowMs = () => Date.now();
@@ -416,7 +431,10 @@ async function snipe(config) {
 // ─── Notifications (Telegram via background.js) ────────────────────────────
 
 const restaurantName = () => (document.title || "").split(" - ")[0].replace(/^[^\w\p{L}]+\s*/u, "").trim() || location.pathname.split("/")[1];
-const bookingLabel = (config) => `${restaurantName()} · ${targetLabel(myTarget)} · ${config.partySize || 2} guests`;
+const bookingLabel = (config) => {
+  const when = config.timeParam ? `${myDate} ${timeParamToDisplay(config.timeParam)}` : targetLabel(myTarget);
+  return `${restaurantName()} · ${when} · ${config.partySize || 2} guests`;
+};
 // All API targets of this run (restaurant-level messages are sent once, so they list every target)
 const allTargetsLabel = (config) => {
   const targets = (config.targets || []).filter((t) => (t.mode || "api") === "api").map(targetLabel);
@@ -449,10 +467,21 @@ async function monitorLoop(config, lastReason = "") {
   log(`👀 Monitoring every ~${intervalMs / 1000}s until ${new Date(until).toLocaleTimeString()} — offerings only until bookings open`);
   notify(`👀 Tock Sniper is monitoring ${restaurantName()} for ${partySize} guests\nTargets: ${allTargetsLabel(config)}\nLast attempt: ${lastReason || "no slot"}`, "monitoring");
 
+  const flexMinutes = Math.max(0, m.flexMinutes ?? MONITOR_DEFAULT_FLEX_MIN);
+  const targetTime = myTarget.timeParam || displayTimeToParam24(myTarget.time || "");
+  log(`👀 Target ${myDate} ${targetTime || "?"} for ${partySize}${flexMinutes ? ` — also takes the closest open time within ±${flexMinutes} min` : " — exact time only"}`);
+
   let checks = 0;
   let openNotified = false;
+  let wasOpen = false;
   let lastMsg = "";
+  let lastAvail = null;    // logged when the open times change
   const note = (msg, type = "info") => { if (msg !== lastMsg) log(msg, type); lastMsg = msg; };
+  const closed = (msg) => {
+    if (wasOpen) log("🔒 Bookings closed again", "error");
+    wasOpen = false;
+    note(msg);
+  };
 
   while (Date.now() < until) {
     if (!(await chrome.storage.local.get("sniping")).sniping) {
@@ -464,25 +493,55 @@ async function monitorLoop(config, lastReason = "") {
     try {
       const experiences = await fetchOfferings(headers);
       if (!experiences.length) {
-        note("👀 Not open yet");
+        closed("👀 Not open yet");
         setStatus(`👀 Monitoring — not open yet (check ${checks})`, "waiting");
       } else {
+        if (!wasOpen) log(`🔓 Bookings open: ${formatExperiences(experiences)}`, "success");
+        wasOpen = true;
+        const exp = pickExperience(experiences, partySize, manualId);
+
+        // Which times actually have a table for this party? (null: calendar unavailable → just try the target)
+        let openTimes = null;
+        try {
+          const slots = await fetchCalendar(headers);
+          openTimes = openTimesFor(slots, partySize, myDate, [exp.id]);
+          const avail = formatOpenTimes(openTimes);
+          if (avail !== lastAvail) {
+            const others = Object.keys(openTimesFor(slots, partySize, null, [exp.id])).filter((k) => !k.startsWith(myDate));
+            const otherDates = [...new Set(others.map((k) => k.split(" ")[0]))];
+            log(`📅 ${myDate}, ${partySize} guests: ${avail || "no open times"}${otherDates.length ? ` · other dates: ${otherDates.slice(0, 8).join(", ")}${otherDates.length > 8 ? "…" : ""}` : ""}`, avail ? "success" : "info");
+            lastAvail = avail;
+          }
+        } catch (err) {
+          if (err.status === 429) throw err;
+          const avail = `error: ${err.message}`;
+          if (avail !== lastAvail) log(`📅 Calendar unavailable (${err.message}) — trying the target time`, "error");
+          lastAvail = avail;
+        }
+
+        const time = openTimes ? pickTime(openTimes, targetTime, flexMinutes) : targetTime;
         if (!openNotified) {
           openNotified = true;
-          log(`🔓 Bookings open: ${formatExperiences(experiences)}`, "success");
-          notify(`🔓 Bookings just opened at ${restaurantName()}.\nTrying to lock: ${allTargetsLabel(config)} (${partySize} guests)…`, "opened");
+          notify(() => `🔓 Bookings just opened at ${restaurantName()}.\n${openTimes ? `${myDate} for ${partySize}: ${formatOpenTimes(openTimes) || "no open times"}\n` : ""}Trying to lock: ${allTargetsLabel(config)} (${partySize} guests)…`, "opened");
         }
-        const exp = pickExperience(experiences, partySize, manualId);
-        const ok = await snipeApi({ ...config, experienceId: exp.id, expSource: "manual", releaseTime: null, quiet: true });
-        if (ok) return;
-        const reason = JSON.parse(sessionStorage.getItem("tockLockResult") || "{}").summary || "no slot";
-        if (/429/.test(reason)) wait = MONITOR_429_BACKOFF_MS;
-        note(`👀 Open, but ${targetLabel(myTarget)}: ${reason}`);
-        setStatus(`👀 Monitoring — open, slot not available (check ${checks})`, "waiting");
+        if (!time) {
+          note(`👀 Open, but no table for ${partySize} at ${myDate} ${targetTime}${flexMinutes ? ` ±${flexMinutes} min` : ""}`);
+          setStatus(`👀 Monitoring — open, no matching time (check ${checks})`, "waiting");
+        } else {
+          if (time !== targetTime) log(`🔀 ${targetTime} not available — trying ${time} instead`);
+          const ok = await snipeApi({ ...config, experienceId: exp.id, expSource: "manual", releaseTime: null, quiet: true, timeParam: time });
+          if (ok) return;
+          const reason = JSON.parse(sessionStorage.getItem("tockLockResult") || "{}").summary || "no slot";
+          if (/429/.test(reason)) wait = MONITOR_429_BACKOFF_MS;
+          note(`👀 Open, but ${myDate} ${time}: ${reason}`);
+          setStatus(`👀 Monitoring — open, slot not available (check ${checks})`, "waiting");
+        }
       }
     } catch (err) {
       if (err.status === 429) wait = MONITOR_429_BACKOFF_MS;
-      note(`👀 Check failed: ${err.message}`, "error");
+      // "Reservations are currently unavailable" (400) = the venue closed bookings again
+      if (/currently unavailable/i.test(err.message)) closed(`👀 Closed: ${err.message}`);
+      else note(`👀 Check failed: ${err.message}`, "error");
     }
     if (wait === MONITOR_429_BACKOFF_MS) {
       note(`⏸️ Rate limited — next check in ${MONITOR_429_BACKOFF_MS / 60000} min`, "error");
@@ -699,6 +758,87 @@ async function fetchOfferings(headers) {
   return parseOfferings(data) || [];
 }
 
+// POST /api/consumer/calendar/full/v2 — same empty ConsumerCalendarRequest as offerings (~10KB+).
+// Response: envelope f1 → f1 → ConsumerFullCalendarV2 (ext 60686)
+//   f1 map<businessDay, TicketGroupByDate { f1 map<date, TicketGroupList { f2 repeated CalendarTicketGroup }> }>
+//   CalendarTicketGroup: f1 date, f3 time "HH:MM", f4 numTickets, f5 availableTickets,
+//     f9 minPurchaseSize, f19 maxPurchaseSize, f13 repeated { f1 ticketTypeId (= experience ID) }
+// One group per bookable table/counter configuration, so a time can appear several times.
+async function fetchCalendar(headers) {
+  const res = await fetch("/api/consumer/calendar/full/v2", {
+    method: "POST",
+    headers,
+    body: buildOfferingsRequest(),
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!res.ok) throw Object.assign(new Error(`calendar HTTP ${res.status}`), { status: res.status });
+  const data = new Uint8Array(await res.arrayBuffer());
+  const err = parseTockError(data);
+  if (err) throw Object.assign(new Error(`calendar ${err.status} ${err.message}`), { status: err.status });
+  return parseCalendar(data);
+}
+
+function parseCalendar(data) {
+  const text = (bytes) => (bytes ? new TextDecoder().decode(bytes) : "");
+  const outer = decodeFields(data)[1]?.[0];
+  const inner = outer && decodeFields(outer)[1]?.[0];
+  const cal = inner && decodeFields(inner)[60686]?.[0];
+  if (!cal) return [];
+  const slots = [];
+  for (const dayEntry of decodeFields(cal)[1] || []) {
+    const day = decodeFields(dayEntry);
+    const byDate = day[2]?.[0] ? decodeFields(day[2][0]) : {};
+    for (const dateEntry of byDate[1] || []) {
+      const d = decodeFields(dateEntry);
+      const list = d[2]?.[0] ? decodeFields(d[2][0]) : {};
+      for (const groupBytes of list[2] || []) {
+        const g = decodeFields(groupBytes);
+        slots.push({
+          date: text(g[1]?.[0]) || text(d[1]?.[0]) || text(day[1]?.[0]),
+          time: text(g[3]?.[0]),
+          available: g[5]?.[0] ?? 0,
+          min: g[9]?.[0] || 1,
+          max: g[19]?.[0] || Infinity,
+          expIds: (g[13] || []).map((p) => decodeFields(p)[1]?.[0]).filter(Boolean),
+        });
+      }
+    }
+  }
+  return slots;
+}
+
+// Bookable times for a party: { "HH:MM": number of matching tables/groups }, optionally limited to
+// one date and a set of experience IDs (groups that don't list one are kept).
+function openTimesFor(slots, partySize, date = null, expIds = null) {
+  const times = {};
+  for (const s of slots) {
+    if (date && s.date !== date) continue;
+    if (s.available < partySize || s.min > partySize || s.max < partySize) continue;
+    if (expIds && s.expIds.length && !s.expIds.some((id) => expIds.includes(id))) continue;
+    const key = date ? s.time : `${s.date} ${s.time}`;
+    times[key] = (times[key] || 0) + 1;
+  }
+  return times;
+}
+
+const toMinutes = (hhmm) => { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; };
+
+// The target time if it's open, else the closest open time within ±flexMinutes (earlier wins ties).
+function pickTime(openTimes, target, flexMinutes) {
+  if (openTimes[target]) return target;
+  let best = null, bestDiff = Infinity;
+  for (const t of Object.keys(openTimes)) {
+    const diff = Math.abs(toMinutes(t) - toMinutes(target));
+    if (diff <= flexMinutes && (diff < bestDiff || (diff === bestDiff && t < best))) { best = t; bestDiff = diff; }
+  }
+  return best;
+}
+
+function formatOpenTimes(openTimes) {
+  return Object.keys(openTimes).sort().map((t) => (openTimes[t] > 1 ? `${t}×${openTimes[t]}` : t)).join(", ");
+}
+
 function pickExperience(experiences, partySize, preferredId) {
   if (!experiences.length) return null;
   const preferred = experiences.find((e) => e.id === preferredId);
@@ -781,7 +921,8 @@ function displayTimeToParam24(time) {
 
 async function snipeApi(config) {
   const partySize = config.partySize || 2;
-  const timeParam = myTarget.timeParam || displayTimeToParam24(myTarget.time || "");
+  // config.timeParam: the monitor may pick a nearby open time instead of the target's
+  const timeParam = config.timeParam || myTarget.timeParam || displayTimeToParam24(myTarget.time || "");
   if (!timeParam) {
     log("❌ API: No target time", "error");
     return false;

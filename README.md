@@ -28,7 +28,8 @@ Auto-grab reservations on [Tock](https://www.exploretock.com) the instant they d
 - **API direct locking** — no page reload; first successful lock wins
 - **Experience ID auto-detect** — reads Tock's experience list at release, so a stale/seasonal ID is corrected (or pick **Manual only** for the fastest path)
 - **Rate-limit aware** — stops at the first 429 and on sold-out (410) responses; a tab opened long after release sends a single attempt instead of a burst
-- **Monitor** *(optional)* — if nothing gets booked (release delayed, sold out), keeps checking whether the restaurant has opened and locks the slot when it does
+- **Monitor** *(optional)* — if nothing gets booked (release delayed, sold out), keeps checking whether the restaurant has opened, reads which times still have a table for your party, and locks your time — or the closest open one within a range you choose (±1 hour by default)
+- **Activity log** — every tab's log is kept in the browser (survives reloads) and can be exported as a text file
 - **Telegram notifications** *(optional)* — when a slot is locked, bookings open, or monitoring starts/ends (once per restaurant, not per tab)
 - **Use this page** — fills the URL, lists the page's experience IDs, and offers to prefill the release time
 - **Live overlay** — draggable status window with countdown, request counts and errors

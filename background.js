@@ -61,7 +61,35 @@ async function handleNotify(msg) {
   return sendTelegram(msg.text, msg.override);
 }
 
+// ─── Activity log ──────────────────────────────────────────────────────────
+// Content scripts send every overlay line ({ type: "tockSniper:log", entry }); kept across runs (newest
+// ACTIVITY_LOG_MAX) in chrome.storage.local.activityLog for the popup's export. Lines are batched and
+// written one batch at a time, so tabs logging together don't overwrite each other.
+const ACTIVITY_LOG_MAX = 5000;
+let pendingLog = [];
+let logFlush = null;
+
+function appendLog(entry) {
+  pendingLog.push(entry);
+  logFlush ||= (async () => {
+    try {
+      while (pendingLog.length) {
+        const batch = pendingLog;
+        pendingLog = [];
+        const { activityLog = [] } = await chrome.storage.local.get("activityLog");
+        await chrome.storage.local.set({ activityLog: activityLog.concat(batch).slice(-ACTIVITY_LOG_MAX) });
+      }
+    } finally {
+      logFlush = null;
+    }
+  })();
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type === "tockSniper:log") {
+    if (msg.entry) appendLog(msg.entry);
+    return;
+  }
   if (msg?.type !== "tockSniper:notify") return;
   notifyQueue = notifyQueue.then(() => handleNotify(msg)).then(sendResponse, (err) => sendResponse({ ok: false, error: err.message }));
   return true; // async response

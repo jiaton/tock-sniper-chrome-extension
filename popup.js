@@ -283,6 +283,7 @@ chrome.storage.local.get(["config", "sniping", "status"], (d) => {
     $("#monitorEnabled").checked = !!mon.enabled;
     $("#monitorInterval").value = mon.intervalSec || 20;
     $("#monitorHours").value = mon.hours || 6;
+    $("#monitorFlex").value = String(mon.flexMinutes ?? 60);
     const tg = d.config.notify?.telegram || {};
     $("#tgEnabled").checked = !!tg.enabled;
     $("#tgToken").value = tg.token || "";
@@ -436,6 +437,7 @@ function readConfig() {
       enabled: $("#monitorEnabled").checked,
       intervalSec: Math.min(600, Math.max(10, parseInt($("#monitorInterval").value) || 20)),
       hours: Math.min(48, Math.max(0.1, parseFloat($("#monitorHours").value) || 6)),
+      flexMinutes: parseInt($("#monitorFlex").value, 10) || 0,
     },
     notify: {
       telegram: {
@@ -483,6 +485,33 @@ $("#timeInput").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#
 $("#url").addEventListener("input", () => { syncFieldsFromUrl(); saveConfig(); });
 $("#useTab").addEventListener("click", useActiveTab);
 $("#monitorEnabled").addEventListener("change", () => { updateExtras(); saveConfig(); });
+$("#monitorFlex").addEventListener("change", saveConfig);
+
+// ── Activity log (every overlay line from all tabs, kept by background.js) ──
+const pad2 = (n) => String(n).padStart(2, "0");
+function formatLogTime(ms) {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, "0")}`;
+}
+async function showLogInfo() {
+  const { activityLog = [] } = await chrome.storage.local.get("activityLog");
+  $("#logInfo").textContent = activityLog.length ? `${activityLog.length} lines since ${formatLogTime(activityLog[0].t).slice(5, 16)}` : "No log yet";
+}
+$("#logExport").addEventListener("click", async () => {
+  const { activityLog = [] } = await chrome.storage.local.get("activityLog");
+  if (!activityLog.length) return showLogInfo();
+  const text = activityLog.map((e) => `${formatLogTime(e.t)}  ${e.level === "error" ? "!" : " "} [${[e.venue, e.target].filter(Boolean).join(" · ")}] ${e.msg}`).join("\n") + "\n";
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  a.download = `tock-sniper-log-${formatLogTime(Date.now()).slice(0, 16).replace(/[-: ]/g, "")}.txt`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+$("#logClear").addEventListener("click", async () => {
+  await chrome.storage.local.remove("activityLog");
+  showLogInfo();
+});
+$("#extras").addEventListener("toggle", () => { if ($("#extras").open) showLogInfo(); });
 
 // api.telegram.org is an optional host permission: asked for only when Telegram is switched on
 // (or "Send test" is pressed) — both are user gestures, which chrome.permissions.request needs.

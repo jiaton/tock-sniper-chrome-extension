@@ -26,7 +26,7 @@ FEATURES:
 • DOM mode — reloads just before release and clicks through the booking dialog, retrying if the page isn't ready yet
 • Experience ID auto-detect — finds the current menu/experience at release, even if it changed
 • Rate-limit aware — stops on sold-out or rate-limited responses instead of hammering the site
-• Monitor (optional) — if a release is delayed or sold out, keeps checking and books when slots open
+• Monitor (optional) — if a release is delayed or sold out, keeps checking, sees which times still have a table for your party, and books your time or the closest open one
 • Telegram notifications (optional) — get a message when a slot is locked or bookings open
 • Release time detection — reads "reservations will be released on…" from the page
 • Live overlay — draggable status window with countdown, progress, and errors
@@ -47,7 +47,7 @@ Tock Sniper helps the user book a restaurant reservation on exploretock.com at t
 
 **storage**
 ```
-Saves the user's settings locally (restaurant URL, experience ID, party size, release time, target dates and times, snipe mode, and the optional monitor and Telegram settings) and the armed/disarmed state shared between the popup, the background service worker and the restaurant tabs. Nothing is synced or sent to the developer.
+Saves the user's settings locally (restaurant URL, experience ID, party size, release time, target dates and times, snipe mode, and the optional monitor and Telegram settings), an activity log of what the extension did (exportable and clearable from the popup) and the armed/disarmed state shared between the popup, the background service worker and the restaurant tabs. Nothing is synced or sent to the developer.
 ```
 
 **alarms**

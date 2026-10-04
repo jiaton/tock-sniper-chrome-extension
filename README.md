@@ -21,63 +21,66 @@ Auto-grab reservations on [Tock](https://www.exploretock.com) the instant they d
 <sub>Simulated with a fictional restaurant — the popup and overlay are the extension's real UI
 (`scripts/demo.html`, recorded with `node scripts/record-demo.mjs`).</sub>
 
-## How It Works
+## Quick start
 
-1. **Set your target** — restaurant URL (or open the restaurant and click **Use this page**), party size, dates and times
-2. **Set the release time** — prefilled from the page when it says when reservations open
-3. **Arm the sniper** — **API** opens one tab for all your dates × times; **DOM** opens one tab per date × time (**Both** does both)
-4. **At release** each tab races, in its mode:
-   - **⚡ API** — sends Tock's lock request directly, densest right at the release moment (5ms apart within ±40ms, ~42 requests over 3s, shared by your targets, weighted toward the top priority), then jumps to checkout
-   - **🖱️ DOM** — reloads 800ms early and clicks through the booking dialog; reloads again if the page shows no availability
-5. **Complete payment** on whichever tab reaches checkout ✅
+1. Open the restaurant's Tock page, click the extension icon, then **Use this page** — it fills in the restaurant
+   and offers the experience and release time it finds (one click each)
+2. Set party size, add the dates and times you want (in order of preference), and click **Arm Sniper**
+3. At release it grabs a slot and opens checkout — **you complete payment** ✅
+
+Everything else has sensible defaults, and each option has a one-line hint in the popup.
 
 ## Features
 
-- **API direct locking** — no page reload; first successful lock wins
-- **Experience ID auto-detect** — reads Tock's experience list at release, so a stale/seasonal ID is corrected (or pick **Manual only** for the fastest path)
-- **Priorities** — dates and times are tried in the order you add them (date first); more targets don't mean more requests
-- **Rate-limit aware** — stops at the first 429 and on sold-out (410) responses; a tab opened long after release checks the calendar and sends at most one lock
-- **Monitor** *(optional)* — if nothing gets booked (release delayed, sold out), keeps checking whether the restaurant has opened, reads which times still have a table for your party, and locks your time — or the closest open one within a range you choose (±1 hour by default)
-- **Activity log** — every tab's log is kept in the browser (survives reloads) and can be exported as a text file
-- **Telegram notifications** *(optional)* — when a slot is locked, bookings open, or monitoring starts/ends (once per restaurant, not per tab)
-- **Use this page** — fills the URL, lists the page's experience IDs, and offers to prefill the release time
-- **Live overlay** — draggable status window with countdown, request counts and errors
+- **⚡ API mode** — locks the slot with Tock's own request at the release instant, no page reload
+- **🖱️ DOM mode** — reloads just before release and clicks through the booking dialog
+- **Priorities** — dates and times are tried in the order you add them
+- **Monitor** *(optional)* — keeps watching after release and grabs seats that open later, or the closest time nearby
+- **Partial parties** *(optional)* — if only single seats are sold, book as many as offered
+- **Telegram alerts** *(optional)* — when seats appear or a slot is locked
+- **Rate-limit aware** — one tab for all API targets, stops at the first 429, and after release only sends a lock when the calendar shows a table
+- **Activity log** — exportable from the popup
 
 ## Install
 
 ### From Chrome Web Store
-[Tock Sniper on the Chrome Web Store](https://chromewebstore.google.com/detail/tock-sniper/ppgobdppcdhckikdbajbhlmohfmhpioo)
+[Tock Sniper on the Chrome Web Store](https://chromewebstore.google.com/detail/tock-sniper/ppgobdppcdhckikdbajbhlmohfmhpioo) — easiest, updates automatically.
+
+> **The store version can lag behind.** Every new version goes through Google's review (usually a few days), so the
+> newest features and fixes reach [GitHub releases](https://github.com/jiaton/tock-sniper-chrome-extension/releases/latest) first. Live status:
+>
+> [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/ppgobdppcdhckikdbajbhlmohfmhpioo?label=store)](https://chromewebstore.google.com/detail/tock-sniper/ppgobdppcdhckikdbajbhlmohfmhpioo)
+> [![GitHub release](https://img.shields.io/github/v/release/jiaton/tock-sniper-chrome-extension?label=latest%20release)](https://github.com/jiaton/tock-sniper-chrome-extension/releases/latest)
+> [![Store sync](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjiaton%2Ftock-sniper-chrome-extension%2Fbadges%2Fstore-status.json)](https://github.com/jiaton/tock-sniper-chrome-extension/actions/workflows/store-status.yml)
+>
+> To see exactly what the store version is missing (public data, no setup beyond `curl` and `jq`):
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/jiaton/tock-sniper-chrome-extension/main/scripts/version-diff.sh | bash
+> ```
+>
+> It prints the store and release versions, the store's review status, the commits between them, and anything on
+> `main` not released yet. Need the newer version now? Use the manual install below with the latest release zip.
 
 ### Manual / Developer
-1. Clone this repo (or download the zip from [Releases](../../releases))
+1. Download `tock-sniper-ext.zip` from the [latest release](../../releases/latest) and unzip it (or clone this repo for unreleased changes on `main`)
 2. Go to `chrome://extensions`
 3. Enable "Developer mode"
-4. Click "Load unpacked" → select this folder
+4. Click "Load unpacked" → select the unzipped (or cloned) folder
 
 After updating, click the reload icon on the extension card and reload any open Tock tabs.
 
-## Usage
-
-1. Click the extension icon
-2. Enter the Tock restaurant URL (e.g. `https://www.exploretock.com/restaurant-name`), or open the restaurant page and click **Use this page**
-3. Experience ID: pick one from the detected list, type it, or leave it empty and choose **Auto only**
-4. Set party size and release time
-5. Add target dates and times
-6. Choose a mode (**API** recommended) and, optionally, open **Monitor & notifications**
-7. Click **Arm Sniper**
-8. Complete payment on whichever tab reaches checkout first ✅
-
-### Telegram notifications
+## Telegram setup
 Create a bot with [@BotFather](https://t.me/BotFather), get your chat ID (e.g. from [@userinfobot](https://t.me/userinfobot)),
 enter both under **Monitor & notifications**, and click **Send test**. Chrome asks once for permission to reach
 `api.telegram.org` — it's optional and only requested when you switch Telegram on. The token is stored only in
 your browser.
 
-## How Tock Releases Work
+## Good to know
 
-Most Tock restaurants release reservations on a schedule (e.g. every Friday at a set time). The page usually says
-when ("New reservations will be released on …"). Some restaurants instead release at random to their Notify waitlist —
-no tool can race those.
+- Most Tock restaurants release on a schedule and say when on their page ("New reservations will be released on …").
+  Some release at random to their Notify waitlist instead — no tool can race those.
+- A listed experience isn't availability: sold-out restaurants keep listing theirs.
 
 ## Use responsibly
 

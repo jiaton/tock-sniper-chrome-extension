@@ -72,7 +72,8 @@ tock-sniper-chrome-extension/
 ├── .github/workflows/     # build.yml: fresh zip, tag + release v<manifest version>, store upload (cws-publish.sh)
 │                          # store-status.yml: every 6h + after builds, store vs latest release → README badge
 │                          #   (store-status.json on the `badges` branch, via .github/scripts/cws-status.sh)
-├── scripts/               # icon.mjs + render-icons.mjs (icons/), store-screenshots.html (store images), demo.html + record-demo.mjs (docs/demo.gif)
+├── scripts/               # version-diff.sh (store vs latest release vs main, public data);
+│                          # icon.mjs + render-icons.mjs (icons/), store-screenshots.html (store images), demo.html + record-demo.mjs (docs/demo.gif)
 ├── docs/demo.gif          # README demo (regenerate: node scripts/record-demo.mjs)
 ├── store/                 # listing.md (store text, permission justifications), screenshots
 ├── LICENSE                # MIT

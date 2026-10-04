@@ -300,8 +300,10 @@ async function run() {
     const tidx = url.searchParams.get("_tidx");
     if (tidx === "api") {
       // One tab for every API target (popup ≥ 3.2): myTarget is the top-priority one, `group` the count
+      // The target list is copied into the tab (sessionStorage) at Arm: config.targets may change later
       const api = targets.filter((t) => (t.mode || "api") === "api");
-      myTarget = { ...(api[0] || targets[0]), mode: "api", group: api.length };
+      myTarget = { ...(api[0] || targets[0]), mode: "api", group: api.length,
+        targets: api.map(({ date, time, timeParam }) => ({ date, time, timeParam })) };
     } else if (tidx !== null) {
       myTarget = targets[parseInt(tidx, 10)] || targets[0];
     } else {
@@ -514,6 +516,11 @@ async function monitorLoop(config, lastReason = "") {
   const manualId = config.expSource === "auto" ? null : extractExperienceId(config);
   const targets = apiTargets(config).filter((t) => t.date && t.timeParam);
   const dates = [...new Set(targets.map((t) => t.date))];
+  if (!targets.length) {
+    log("❌ Monitor: no target date/time for this tab — Disarm and Arm again", "error");
+    setStatus("❌ No targets — Arm again", "error");
+    return;
+  }
 
   log(`👀 Monitoring every ~${intervalMs / 1000}s until ${new Date(until).toLocaleTimeString()} — offerings only until an experience is listed`);
   notify(`👀 Tock Sniper is monitoring ${restaurantName()} for ${partySize} guests\nTargets: ${allTargetsLabel(config)}\nLast attempt: ${lastReason || "no slot"}`, "monitoring");
@@ -1028,7 +1035,7 @@ function apiTargets(config) {
   const fallbackTime = targetFromUrl().timeParam || "";
   const norm = (t) => ({ date: t.date, time: t.time || timeParamToDisplay(fallbackTime), timeParam: t.timeParam || displayTimeToParam24(t.time || "") || fallbackTime });
   if (!myTarget?.group) return [norm({ ...myTarget, date: myDate })];
-  return (config.targets || []).filter((t) => (t.mode || "api") === "api").map(norm);
+  return (myTarget.targets || (config.targets || []).filter((t) => (t.mode || "api") === "api")).map(norm);
 }
 
 const lockLabel = (t) => `${t.date} ${timeParamToDisplay(t.timeParam) || t.timeParam}`;

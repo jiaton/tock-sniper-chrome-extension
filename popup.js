@@ -478,12 +478,13 @@ function updateExtras() {
 }
 
 function saveConfig() {
-  chrome.storage.local.set({ config: readConfig() }, () => {
+  // Keep the armed run's targets (built at Arm, not part of the form) — running tabs may still read them
+  chrome.storage.local.get("config", (d) => chrome.storage.local.set({ config: { ...readConfig(), targets: d.config?.targets } }, () => {
     const el = $("#saved");
     el.classList.add("show");
     clearTimeout(savedTimer);
     savedTimer = setTimeout(() => el.classList.remove("show"), 1200);
-  });
+  }));
 }
 
 // ── Events ──

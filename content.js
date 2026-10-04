@@ -1098,8 +1098,8 @@ async function snipeApi(config) {
   say(`🚀 API lock: ${targets.map(lockLabel).join(" → ")}, ${guestsLabel(lockParty, partySize)}, exp ${experienceId || "(waiting for offerings)"} [${expSource}]`);
 
   // Burst: concurrent offerings + lock requests following API_SCHEDULE around the release time,
-  // until API_BURST_AFTER_MS after it. The sends are shared by all targets, round-robin in priority
-  // order, so more targets don't mean more requests. First lock success wins. Stops early when every
+  // until API_BURST_AFTER_MS after it. The sends are shared by all targets, weighted by priority
+  // (see nextTarget), so more targets don't mean more requests. First lock success wins. Stops early when every
   // target is sold out (410 streak after release) or on rate limiting (429). Local clock (NTP).
   const releaseMs = config.releaseTime ? new Date(config.releaseTime).getTime() : Date.now();
   const endMs = releaseMs + API_BURST_AFTER_MS;
@@ -1153,13 +1153,20 @@ async function snipeApi(config) {
   // Per-target sold-out tracking; a sold-out target leaves the rotation
   const soldOutStreak = targets.map(() => 0);
   const soldOut = new Set();
-  let nextIdx = 0;
+  // Sends are shared by priority weight 1/(rank): 2 targets 67/33%, 3 → 55/27/18%, 4 → 48/24/16/12%.
+  // Smooth weighted round-robin keeps each target's sends evenly spread (no long runs of one target).
+  const weights = targets.map((_, i) => 1 / (i + 1));
+  const credit = targets.map(() => 0);
   const nextTarget = () => {
-    for (let k = 0; k < targets.length; k++) {
-      const i = (nextIdx + k) % targets.length;
-      if (!soldOut.has(i)) { nextIdx = i + 1; return i; }
+    let best = -1, total = 0;
+    for (let i = 0; i < targets.length; i++) {
+      if (soldOut.has(i)) continue;
+      credit[i] += weights[i];
+      total += weights[i];
+      if (best < 0 || credit[i] > credit[best]) best = i;
     }
-    return -1;
+    if (best >= 0) credit[best] -= total;
+    return best;
   };
 
   let lastLockMsg = "";
@@ -1301,7 +1308,7 @@ async function snipeApi(config) {
   } else {
     // Send at precomputed absolute times: densest around release (see API_SCHEDULE)
     const fireTimes = buildFireTimes(releaseMs);
-    log(`🗓️ ${fireTimes.length} sends planned${targets.length > 1 ? `, shared by ${targets.length} targets in turn` : ""}, ${-API_SCHEDULE[0].from}ms before to ${API_BURST_AFTER_MS}ms after release`);
+    log(`🗓️ ${fireTimes.length} sends planned${targets.length > 1 ? `, shared by ${targets.length} targets by priority (${targets.map((_, i) => Math.round(100 / (i + 1) / targets.reduce((a, __, j) => a + 1 / (j + 1), 0))).join("/")}%)` : ""}, ${-API_SCHEDULE[0].from}ms before to ${API_BURST_AFTER_MS}ms after release`);
     let lastOfferingsAt = -Infinity;
     for (const t of fireTimes) {
       await waitUntil(t);

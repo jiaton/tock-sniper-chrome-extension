@@ -19,7 +19,7 @@ Auto-grab reservations on [Tock](https://www.exploretock.com) the instant they d
 2. **Set the release time** — prefilled from the page when it says when reservations open
 3. **Arm the sniper** — **API** opens one tab for all your dates × times; **DOM** opens one tab per date × time (**Both** does both)
 4. **At release** each tab races, in its mode:
-   - **⚡ API** — sends Tock's lock request directly, densest right at the release moment (5ms apart within ±40ms, ~42 requests over 3s, shared by all your targets in priority order), then jumps to checkout
+   - **⚡ API** — sends Tock's lock request directly, densest right at the release moment (5ms apart within ±40ms, ~42 requests over 3s, shared by your targets, weighted toward the top priority), then jumps to checkout
    - **🖱️ DOM** — reloads 800ms early and clicks through the booking dialog; reloads again if the page shows no availability
 5. **Complete payment** on whichever tab reaches checkout ✅
 

@@ -48,7 +48,7 @@ content.js (per tab)
 ### Snipe Modes
 | Mode | Tabs | Behavior |
 |------|-------------------|----------|
-| ⚡ API Direct | 1 for all | No reload. Sends are shared round-robin by all targets in priority order (a target leaves the rotation once sold out). ~42 `PUT /api/ticket/group/lock` sends centered on the release time (5ms apart within ±40ms, sparser outward, T-100ms … T+3s), plus offerings ≤ every 50ms until an experience is listed. First lock success wins; stops on sold-out or 429. A tab starting after T+3s sends once, only if offerings + calendar show a table for the party. |
+| ⚡ API Direct | 1 for all | No reload. Sends are shared by all targets, weighted by priority 1/rank (2 targets 67/33%, 4 → 48/24/16/12%; smooth weighted round-robin); a target leaves the rotation once sold out. ~42 `PUT /api/ticket/group/lock` sends centered on the release time (5ms apart within ±40ms, sparser outward, T-100ms … T+3s), plus offerings ≤ every 50ms until an experience is listed. First lock success wins; stops on sold-out or 429. A tab starting after T+3s sends once, only if offerings + calendar show a table for the party. |
 | 🖱️ DOM Click | 1 per target | Reloads 800ms before release, clicks through the booking dialog. Retries (reload) up to 3× within 10s if the page shows no availability. |
 | 🔥 Both | 1 + 1 per target | One API tab for all targets plus a DOM tab per target. They run in parallel, independently. |
 

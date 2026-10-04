@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/Users/tong/.claude/scheduled-tasks/tock-sniper-review-watch/check.sh)"
+    ]
+  }
+}

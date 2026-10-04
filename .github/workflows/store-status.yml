@@ -1,0 +1,59 @@
+name: Store status
+
+# Compares the Chrome Web Store listing with the latest GitHub release and publishes the result as a
+# shields.io endpoint badge (store-status.json on the `badges` branch, shown in the README).
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_run:
+    workflows: [Build Extension ZIP]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: store-status
+  cancel-in-progress: false
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Latest release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "tag=$(gh release view --json tagName -q .tagName)" >> "$GITHUB_OUTPUT"
+
+      - name: Check the store
+        env:
+          EXTENSION_ID: ppgobdppcdhckikdbajbhlmohfmhpioo
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+        run: .github/scripts/cws-status.sh "${{ steps.release.outputs.tag }}" "$RUNNER_TEMP/store-status.json"
+
+      - name: Publish the badge
+        run: |
+          [ -f "$RUNNER_TEMP/store-status.json" ] || exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git fetch --depth=1 origin badges 2>/dev/null; then
+            git checkout -B badges FETCH_HEAD
+          else
+            git checkout --orphan badges
+            git rm -rfq .
+          fi
+          cp "$RUNNER_TEMP/store-status.json" store-status.json
+          git add store-status.json
+          if git diff --cached --quiet; then
+            echo "Badge unchanged"
+          else
+            git commit -qm "Store status: $(jq -r .message store-status.json)"
+            git push origin badges
+          fi

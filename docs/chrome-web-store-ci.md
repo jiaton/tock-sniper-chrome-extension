@@ -62,6 +62,23 @@ Use the Google account that owns the store item.
 2. Push to `main`. CI creates the `v<version>` release, uploads it and submits it for review.
 3. Watch the run's log: `::notice::Chrome Web Store: submitted (state=PENDING_REVIEW)` means it's in review.
 
+## Store sync badge
+
+`.github/workflows/store-status.yml` runs every 6 hours, after every build, and on demand (*Actions → Store
+status → Run workflow*). It compares the store item (API v2 `fetchStatus`, read-only) with the latest GitHub
+release and writes `store-status.json` to the `badges` branch, which the README's "store sync" badge reads:
+
+| Badge | Meaning |
+|---|---|
+| `v3.1.0 live` (green) | The store serves the latest release |
+| `v3.1.0 in review` (orange) | Submitted, waiting for review |
+| `v3.1.0 approved, not published` (yellow) | Approved but staged (deferred publishing) |
+| `v3.1.0 not submitted (store v2.1.0)` (red) | The store is behind and nothing is in review — check the upload step |
+| `v3.1.0 rejected` / `review cancelled` (red) | See the Developer Dashboard |
+| `status unavailable` (grey) | Token or API error — see the run's log |
+
+The run's summary page also shows the published and submitted versions side by side.
+
 ## Troubleshooting
 
 | Log message | Fix |

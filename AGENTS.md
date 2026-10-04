@@ -69,7 +69,9 @@ tock-sniper-chrome-extension/
 ├── content.js             # Per-tab snipe logic (API direct or DOM click)
 ├── background.js          # Keepalive alarm, clears state on arm/disarm, sends Telegram notifications
 ├── icons/                 # 16, 48, 128px service-bell icons (generated — edit scripts/icon.mjs)
-├── .github/workflows/     # CI: builds a fresh zip, tags + releases v<manifest version> on push to main
+├── .github/workflows/     # build.yml: fresh zip, tag + release v<manifest version>, store upload (cws-publish.sh)
+│                          # store-status.yml: every 6h + after builds, store vs latest release → README badge
+│                          #   (store-status.json on the `badges` branch, via .github/scripts/cws-status.sh)
 ├── scripts/               # icon.mjs + render-icons.mjs (icons/), store-screenshots.html (store images), demo.html + record-demo.mjs (docs/demo.gif)
 ├── docs/demo.gif          # README demo (regenerate: node scripts/record-demo.mjs)
 ├── store/                 # listing.md (store text, permission justifications), screenshots

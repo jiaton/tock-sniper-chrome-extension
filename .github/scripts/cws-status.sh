@@ -27,6 +27,8 @@ done
 badge() { # message color
   jq -n --arg m "$1" --arg c "$2" '{schemaVersion: 1, label: "store sync", message: $m, color: $c, cacheSeconds: 1800}' >"$OUT"
   echo "Store status: $1"
+  # For later steps (README diff): the published store version and the badge text
+  { echo "published=${PUBLISHED:-}"; echo "message=$1"; } >>"${GITHUB_OUTPUT:-/dev/null}"
   {
     echo "### Chrome Web Store vs GitHub release"
     echo

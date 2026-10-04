@@ -46,21 +46,23 @@ Everything else has sensible defaults, and each option has a one-line hint in th
 ### From Chrome Web Store
 [Tock Sniper on the Chrome Web Store](https://chromewebstore.google.com/detail/tock-sniper/ppgobdppcdhckikdbajbhlmohfmhpioo) — easiest, updates automatically.
 
-> **The store version can lag behind.** Every new version goes through Google's review (usually a few days), so the
-> newest features and fixes reach [GitHub releases](https://github.com/jiaton/tock-sniper-chrome-extension/releases/latest) first. Live status:
->
-> [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/ppgobdppcdhckikdbajbhlmohfmhpioo?label=store)](https://chromewebstore.google.com/detail/tock-sniper/ppgobdppcdhckikdbajbhlmohfmhpioo)
-> [![GitHub release](https://img.shields.io/github/v/release/jiaton/tock-sniper-chrome-extension?label=latest%20release)](https://github.com/jiaton/tock-sniper-chrome-extension/releases/latest)
-> [![Store sync](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjiaton%2Ftock-sniper-chrome-extension%2Fbadges%2Fstore-status.json)](https://github.com/jiaton/tock-sniper-chrome-extension/actions/workflows/store-status.yml)
->
-> To see exactly what the store version is missing (public data, no setup beyond `curl` and `jq`):
->
-> ```bash
-> curl -fsSL https://raw.githubusercontent.com/jiaton/tock-sniper-chrome-extension/main/scripts/version-diff.sh | bash
-> ```
->
-> It prints the store and release versions, the store's review status, the commits between them, and anything on
-> `main` not released yet. Need the newer version now? Use the manual install below with the latest release zip.
+The store version can lag behind: every new version waits for Google's review (usually a few days), so new
+features reach [GitHub releases](https://github.com/jiaton/tock-sniper-chrome-extension/releases/latest) first. Current status (updated automatically):
+
+<!-- store-diff:start -->
+⏳ **Chrome Web Store: v2.1.0 · latest release: v3.1.0** (v3.1.0 in review)
+
+<details><summary>Not in the store version yet (4 changes)</summary>
+
+- Update content.js
+- Release v3.0.0
+- Release v3.0.1: optional Telegram permission, open-source prep
+- Release v3.1.0: service-bell icon
+
+[Full comparison](https://github.com/jiaton/tock-sniper-chrome-extension/compare/v2.1.0...v3.1.0) · get v3.1.0 now: [manual install](#manual--developer)
+
+</details>
+<!-- store-diff:end -->
 
 ### Manual / Developer
 1. Download `tock-sniper-ext.zip` from the [latest release](../../releases/latest) and unzip it (or clone this repo for unreleased changes on `main`)

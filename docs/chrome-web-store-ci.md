@@ -77,7 +77,10 @@ release and writes `store-status.json` to the `badges` branch, which the README'
 | `v3.1.0 rejected` / `review cancelled` (red) | See the Developer Dashboard |
 | `status unavailable` (grey) | Token or API error — see the run's log |
 
-The run's summary page also shows the published and submitted versions side by side.
+The run's summary page also shows the published and submitted versions side by side. The same run rewrites the
+README's "not in the store yet" block (between `<!-- store-diff:start -->` and `<!-- store-diff:end -->`, from
+`scripts/version-diff.sh --markdown`) and commits it to `main` only when it changed. Commits whose subject starts
+with `CI`, `Docs` or `README` are left out of that list.
 
 ## Troubleshooting
 

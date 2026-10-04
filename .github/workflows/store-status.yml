@@ -1,7 +1,8 @@
 name: Store status
 
 # Compares the Chrome Web Store listing with the latest GitHub release and publishes the result as a
-# shields.io endpoint badge (store-status.json on the `badges` branch, shown in the README).
+# shields.io endpoint badge (store-status.json on the `badges` branch) and as the "not in the store yet"
+# block in README.md (between <!-- store-diff:start/end -->; committed only when it changes).
 on:
   schedule:
     - cron: "17 */6 * * *"
@@ -30,6 +31,7 @@ jobs:
         run: echo "tag=$(gh release view --json tagName -q .tagName)" >> "$GITHUB_OUTPUT"
 
       - name: Check the store
+        id: store
         env:
           EXTENSION_ID: ppgobdppcdhckikdbajbhlmohfmhpioo
           CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
@@ -37,6 +39,32 @@ jobs:
           CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
           CWS_PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
         run: .github/scripts/cws-status.sh "${{ steps.release.outputs.tag }}" "$RUNNER_TEMP/store-status.json"
+
+      - name: Update the README
+        if: steps.store.outputs.published != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STORE_VERSION: ${{ steps.store.outputs.published }}
+          STORE_SYNC: ${{ steps.store.outputs.message }}
+        run: |
+          scripts/version-diff.sh --markdown > "$RUNNER_TEMP/store-diff.md"
+          python3 - "$RUNNER_TEMP/store-diff.md" <<'PY'
+          import re, sys
+          block = open(sys.argv[1]).read().strip()
+          readme = open("README.md").read()
+          new = re.sub(r"(<!-- store-diff:start -->).*?(<!-- store-diff:end -->)",
+                       lambda m: m.group(1) + "\n" + block + "\n" + m.group(2), readme, flags=re.S)
+          open("README.md", "w").write(new)
+          PY
+          if git diff --quiet README.md; then
+            echo "README unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qm "Docs: update the store version status in README" README.md
+          # Pushes made with GITHUB_TOKEN don't trigger other workflows (no build loop)
+          git pull -q --rebase origin main && git push origin HEAD:main
 
       - name: Publish the badge
         run: |

@@ -70,7 +70,7 @@ tock-sniper-chrome-extension/
 ├── background.js          # Keepalive alarm, clears state on arm/disarm, sends Telegram notifications
 ├── icons/                 # 16, 48, 128px service-bell icons (generated — edit scripts/icon.mjs)
 ├── .github/workflows/     # build.yml: fresh zip, tag + release v<manifest version>, store upload (cws-publish.sh)
-│                          # store-status.yml: every 6h + after builds, store vs latest release → README badge
+│                          # store-status.yml: every 6h + after builds, store vs latest release → README block
 │                          #   (store-status.json on the `badges` branch, via .github/scripts/cws-status.sh)
 ├── scripts/               # version-diff.sh (store vs latest release; --markdown → README store-diff block);
 │                          # icon.mjs + render-icons.mjs (icons/), store-screenshots.html (store images), demo.html + record-demo.mjs (docs/demo.gif)

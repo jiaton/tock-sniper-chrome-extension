@@ -66,7 +66,8 @@ Use the Google account that owns the store item.
 
 `.github/workflows/store-status.yml` runs every 6 hours, after every build, and on demand (*Actions → Store
 status → Run workflow*). It compares the store item (API v2 `fetchStatus`, read-only) with the latest GitHub
-release and writes `store-status.json` to the `badges` branch, which the README's "store sync" badge reads:
+release and writes `store-status.json` to the `badges` branch (a shields.io endpoint badge, also read by
+`scripts/version-diff.sh`; embed `https://img.shields.io/endpoint?url=<raw URL of that file>` to show it):
 
 | Badge | Meaning |
 |---|---|

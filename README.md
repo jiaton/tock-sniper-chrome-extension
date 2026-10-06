@@ -3,10 +3,8 @@
 [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/ppgobdppcdhckikdbajbhlmohfmhpioo?label=chrome%20web%20store&logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/tock-sniper/ppgobdppcdhckikdbajbhlmohfmhpioo)
 [![Users](https://img.shields.io/chrome-web-store/users/ppgobdppcdhckikdbajbhlmohfmhpioo?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/tock-sniper/ppgobdppcdhckikdbajbhlmohfmhpioo)
 [![GitHub release](https://img.shields.io/github/v/release/jiaton/tock-sniper-chrome-extension?logo=github)](https://github.com/jiaton/tock-sniper-chrome-extension/releases/latest)
-[![Store sync](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjiaton%2Ftock-sniper-chrome-extension%2Fbadges%2Fstore-status.json&logo=googlechrome&logoColor=white)](https://github.com/jiaton/tock-sniper-chrome-extension/actions/workflows/store-status.yml)
 [![Build](https://img.shields.io/github/actions/workflow/status/jiaton/tock-sniper-chrome-extension/build.yml?branch=main&logo=githubactions&logoColor=white)](https://github.com/jiaton/tock-sniper-chrome-extension/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/github/license/jiaton/tock-sniper-chrome-extension)](LICENSE)
-[![Manifest V3](https://img.shields.io/badge/manifest-v3-4285F4?logo=googlechrome&logoColor=white)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
 
 Auto-grab reservations on [Tock](https://www.exploretock.com) the instant they drop.
 

@@ -1,4 +1,4 @@
-# Chrome Web Store listing — Tock Sniper v3.1.0
+# Chrome Web Store listing — Tock Sniper v3.2.0
 
 Copy-paste text for the developer dashboard. Keep it in sync with `manifest.json`.
 
@@ -15,19 +15,21 @@ Tock Sniper books reservations on exploretock.com the moment new slots are relea
 
 HOW IT WORKS:
 1. Open the restaurant on Tock and click "Use this page" (or paste the URL)
-2. Pick the experience, party size, target dates and times
+2. Pick the experience, party size, and target dates and times in order of preference
 3. Set the release time — prefilled when the page says when reservations open
-4. Click "Arm Sniper" — opens one tab per date × time
-5. At release, each tab races to lock your slot and jumps to checkout
-6. Complete payment on whichever tab reaches checkout first
+4. Click "Arm Sniper"
+5. At release it locks the best available slot and jumps to checkout
+6. Complete payment yourself
 
 FEATURES:
-• API mode — locks the slot directly, with requests concentrated around the exact release moment
+• API mode — locks the slot directly, with requests concentrated around the exact release moment; one tab covers all your dates and times, tried in your order of preference
 • DOM mode — reloads just before release and clicks through the booking dialog, retrying if the page isn't ready yet
 • Experience ID auto-detect — finds the current menu/experience at release, even if it changed
-• Rate-limit aware — stops on sold-out or rate-limited responses instead of hammering the site
+• Rate-limit aware — stops on sold-out or rate-limited responses, and after release only tries times the calendar shows as available
 • Monitor (optional) — if a release is delayed or sold out, keeps checking, sees which times still have a table for your party, and books your time or the closest open one
-• Telegram notifications (optional) — get a message when a slot is locked or bookings open
+• Partial parties (optional) — if a seating only sells single seats, book as many as offered
+• Telegram notifications (optional) — get a message when seats appear or a slot is locked
+• Activity log — export what the extension did as a text file
 • Release time detection — reads "reservations will be released on…" from the page
 • Live overlay — draggable status window with countdown, progress, and errors
 

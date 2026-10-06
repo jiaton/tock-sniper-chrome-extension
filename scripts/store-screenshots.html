@@ -75,28 +75,28 @@ const shot = Number(new URLSearchParams(location.search).get("shot") || 1);
 const SHOTS = {
   1: { kicker: "Set up in seconds", title: "Point it at the restaurant. It reads the rest.",
        body: "Click “Use this page” on any restaurant. Tock Sniper lists its experiences and prefills the release time.",
-       bullets: ["Experience IDs detected from the page", "Release time converted to your time zone", "One tab per date × time"],
-       popup: { config: { url: "", partySize: 4, releaseTime: "2026-10-09T19:45:00", prefTimes: ["6:00 PM", "8:00 PM"], dates: ["2026-10-16", "2026-10-17"], snipeMode: "api", expSource: "hybrid", experienceId: null },
+       bullets: ["Experience IDs detected from the page", "Release time converted to your time zone", "Dates and times in your order of preference"],
+       popup: { config: { url: "", partySize: 4, releaseTime: "2026-10-09T19:45:00", prefTimes: ["8:00 PM", "6:00 PM"], dates: ["2026-10-17", "2026-10-16"], snipeMode: "api", expSource: "hybrid", experienceId: null },
                 useTab: true, pick: 712345, prefill: true }, ext: true },
   2: { kicker: "Fires at the exact moment", title: "Densest right at release. Calm everywhere else.",
-       body: "Requests are scheduled around the release instant — 5 ms apart within ±40 ms, sparser outward — and stop on sold-out or rate limits.",
-       bullets: ["Locks the slot directly — no page reload", "Auto-corrects a stale experience ID", "Draggable live overlay"],
+       body: "One tab covers every date and time you picked. Requests cluster around the release instant — 5 ms apart within ±40 ms — weighted toward your first choice.",
+       bullets: ["Locks the slot directly — no page reload", "More targets don’t mean more requests", "Draggable live overlay"],
        overlay: "countdown" },
   3: { kicker: "Slot held", title: "Straight to checkout — you just pay.",
        body: "The first successful lock wins and the tab jumps to checkout. Every request is counted, so you know exactly what was sent.",
-       bullets: ["API, DOM-click or both, side by side", "Stops at the first 429", "Single attempt if you open it late"],
+       bullets: ["Stops at the first 429 or when sold out", "Only one tab ever sends", "Opened late? Checks the calendar before sending"],
        overlay: "success" },
-  4: { kicker: "Release delayed?", title: "Keep watching. Get pinged when it opens.",
-       body: "Optional monitor keeps checking a restaurant that hasn't opened yet and books as soon as it does. Optional Telegram messages to your own bot.",
-       bullets: ["Polls lightly; backs off 10 min after a 429", "One message per restaurant, not per tab", "Token stays in your browser"],
+  4: { kicker: "Sold out or delayed?", title: "Keep watching. Grab what opens up.",
+       body: "The optional monitor reads which times still have a table for your party and takes your time — or the closest open one. Alerts go to your own Telegram bot.",
+       bullets: ["Seats per time, straight from the calendar", "Closest open time within ±1 hour (adjustable)", "Never sends a lock when nothing is free"],
        popup: { config: { url: BASE_URL, partySize: 4, releaseTime: "2026-10-09T20:00:00", prefTimes: ["8:00 PM"], dates: ["2026-10-17"], snipeMode: "api", expSource: "hybrid", experienceId: 712345,
-                          monitor: { enabled: true, intervalSec: 20, hours: 6 }, notify: { telegram: { enabled: true, token: "123456789:demo-token-not-real", chatId: "123456789" } } },
+                          monitor: { enabled: true, intervalSec: 30, hours: 6, flexMinutes: 60 }, notify: { telegram: { enabled: true, token: "123456789:demo-token-not-real", chatId: "123456789" } } },
                 extras: true, scroll: true },
-       notes: ["🔓 Bookings just opened at Saffron & Salt.\nTrying to lock: 2026-10-17 8:00 PM (4 guests)…", "🎉 Locked Saffron & Salt · 2026-10-17 8:00 PM · 4 guests!\nComplete checkout within ~10 min in the browser."] },
-  5: { kicker: "Built for release night", title: "Every date and time you want, at once.",
-       body: "Add dates and times as chips, pick API, DOM or both, and arm. Dark mode included.",
-       bullets: ["Date × time targets", "Manual, auto or hybrid experience ID", "Auto-saves as you type"],
-       popup: { config: { url: BASE_URL, partySize: 2, releaseTime: "2026-10-09T20:00:00", prefTimes: ["6:00 PM", "8:00 PM"], dates: ["2026-10-16", "2026-10-17"], snipeMode: "both", expSource: "hybrid", experienceId: 712345 }, scroll: true },
+       notes: ["🔓 Seats at Saffron & Salt — 2026-10-17 8:30 PM, 4 guests\nTrying to lock it…", "🎉 Locked Saffron & Salt · 2026-10-17 8:30 PM · 4 guests!\nComplete checkout within ~10 min in the browser."] },
+  5: { kicker: "Built for release night", title: "Every date and time you want, in your order.",
+       body: "Add dates and times as numbered chips — they’re tried in that order. Pick API, DOM or both, and arm. Dark mode included.",
+       bullets: ["Priorities: first date and time first", "Only single seats sold? Book as many as offered", "Exportable activity log"],
+       popup: { config: { url: BASE_URL, partySize: 2, partyPolicy: "max", releaseTime: "2026-10-09T20:00:00", prefTimes: ["8:00 PM", "6:00 PM"], dates: ["2026-10-17", "2026-10-16"], snipeMode: "api", expSource: "hybrid", experienceId: 712345 }, scroll: true },
        dark: true },
 };
 
@@ -156,9 +156,9 @@ async function renderPopup(opts) {
   }
   if (opts.extras) doc.querySelector("#extras").open = true;
   const full = doc.documentElement.scrollHeight;
-  const maxH = s.dark ? 760 : 704 - 44 - 8;
+  const maxH = s.dark ? 800 : 704 - 44 - 8;
   frame.style.height = Math.min(full, maxH) + "px";
-  if (s.dark) { frame.style.left = "800px"; frame.style.top = "20px"; }
+  if (s.dark) { frame.style.left = "800px"; frame.style.top = "0px"; }
   else { frame.style.left = (540 + 700 - 360 - 14) + "px"; frame.style.top = (48 + 44 + 6) + "px"; }
   if (opts.scroll) win.scrollTo(0, full);
 }
@@ -176,26 +176,26 @@ async function renderOverlay(kind) {
   const T = new Date("2026-10-09T20:00:00");
   const fmt = (offsetMs) => { const d = new Date(T.getTime() + offsetMs); return d.toTimeString().slice(0, 8) + "." + String(d.getMilliseconds()).padStart(3, "0"); };
   const set = (id, v) => (document.getElementById(id).textContent = v);
-  set("ts-date", "2026-10-17 8:00 PM [⚡API]");
+  set("ts-date", "4 targets [⚡API]");
   const status = document.getElementById("ts-status");
   const log = document.getElementById("ts-log");
   const add = (off, msg, type = "info") => log.insertAdjacentHTML("beforeend", `<div class="ts-entry ${type}"><span class="ts-time">${fmt(off)}</span>${msg}</div>`);
   if (kind === "countdown") {
     set("ts-local", fmt(-12346)); set("ts-countdown", "00:12.346");
     status.className = "ts-status waiting"; status.textContent = "⏰ API in 00:12.346";
-    add(-1800000, "🔑 Headers: session ✓ auth ✓ csrf ✓ fp ✓ build servingstack-2026-09-30RC03-00");
+    add(-1800000, "🎯 4 targets, by priority: 1. 2026-10-17 8:00 PM, 2. 2026-10-17 6:00 PM, 3. 2026-10-16 8:00 PM, 4. 2026-10-16 6:00 PM");
     add(-1800000, "Waiting 29:47.654 — burst runs 100ms before to 3000ms after release, densest at release");
   } else {
     set("ts-local", fmt(184)); set("ts-countdown", "-00:00.184");
     status.className = "ts-status success"; status.textContent = "🛒 Slot locked! Loading checkout...";
-    add(-300, "🔑 Headers: session ✓ auth ✓ csrf ✓ fp ✓ build servingstack-2026-09-30RC03-00");
-    add(-299, "🚀 API lock: 2026-10-17T20:00, 4 guests, exp 712345 [hybrid]");
-    add(-298, "🗓️ 42 sends planned, 100ms before to 3000ms after release");
-    add(52, "📋 Offerings: 712345 Autumn Tasting Menu (1/2/3/4/5/6p); 712346 Chef's Counter Omakase (2p)");
+    add(-299, "🚀 API lock: 2026-10-17 8:00 PM → 2026-10-17 6:00 PM → 2026-10-16 8:00 PM → 2026-10-16 6:00 PM, 4 guests, exp 712345 [hybrid]");
+    add(-298, "🗓️ 41 sends planned, shared by 4 targets by priority (48/24/16/12%), 100ms before to 3000ms after release");
+    add(52, "📋 Offerings: 712345 Autumn Tasting Menu (1–6 guests); 712346 Chef's Counter Omakase (2 guests only)");
     add(61, "⏳ #4: 410 Unfortunately, someone else just selected this and it is no longer available.");
-    add(183, "✅ API lock success! Attempt 19: 2026-10-17T20:00 | Autumn Tasting Menu", "success");
+    add(183, "✅ API lock success! 2026-10-17 8:00 PM, attempt 19: 2026-10-17T20:00 | Autumn Tasting Menu", "success");
     add(184, "📊 Sent 19 lock, 4 offerings → 410×12 in 302ms");
   }
+  log.style.maxHeight = el.style.maxHeight = "none"; // show the whole log (the real overlay scrolls)
   log.scrollTop = log.scrollHeight;
 }
 

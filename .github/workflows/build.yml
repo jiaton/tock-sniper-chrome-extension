@@ -54,17 +54,26 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.version.outputs.tag }}"
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists, skipping release"
+          # Keyed on the release, not the tag: if a run pushed the tag but GitHub failed to create the
+          # release (it happens: HTTP 500), the next run finishes the job instead of skipping it.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, skipping"
             echo "created=false" >> "$GITHUB_OUTPUT"
-          else
+            exit 0
+          fi
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
             git tag "$TAG"
             git push origin "$TAG"
+          fi
+          for attempt in 1 2 3; do
             gh release create "$TAG" tock-sniper-ext.zip \
               --title "Tock Sniper $TAG" \
-              --generate-notes
-            echo "created=true" >> "$GITHUB_OUTPUT"
-          fi
+              --generate-notes && break
+            [ "$attempt" = 3 ] && exit 1
+            echo "Release creation failed, retrying in 15s…"
+            sleep 15
+          done
+          echo "created=true" >> "$GITHUB_OUTPUT"
 
       # For a new version (or a manual run with store_upload). Skips itself (with a notice) until the
       # CWS_* secrets are configured — see docs/chrome-web-store-ci.md. Set the repo variable

@@ -50,18 +50,7 @@ The store version can lag behind: every new version waits for Google's review (u
 features reach [GitHub releases](https://github.com/jiaton/tock-sniper-chrome-extension/releases/latest) first. Current status (updated automatically):
 
 <!-- store-diff:start -->
-⏳ **Chrome Web Store: v2.1.0 · latest release: v3.1.0** (v3.1.0 in review)
-
-<details><summary>Not in the store version yet (4 changes)</summary>
-
-- Update content.js
-- Release v3.0.0
-- Release v3.0.1: optional Telegram permission, open-source prep
-- Release v3.1.0: service-bell icon
-
-[Full comparison](https://github.com/jiaton/tock-sniper-chrome-extension/compare/v2.1.0...v3.1.0) · get v3.1.0 now: [manual install](#manual--developer)
-
-</details>
+✅ **The Chrome Web Store has the latest release, v3.1.0.**
 <!-- store-diff:end -->
 
 ### Manual / Developer

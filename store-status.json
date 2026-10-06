@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "label": "store sync",
-  "message": "v3.1.0 live",
-  "color": "brightgreen",
+  "message": "v3.2.0 in review",
+  "color": "orange",
   "cacheSeconds": 1800
 }

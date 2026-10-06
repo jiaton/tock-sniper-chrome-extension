@@ -48,7 +48,7 @@ The store version can lag behind: every new version waits for Google's review (u
 features reach [GitHub releases](https://github.com/jiaton/tock-sniper-chrome-extension/releases/latest) first. Current status (updated automatically):
 
 <!-- store-diff:start -->
-⏳ **Chrome Web Store: v3.1.0 · latest release: v3.2.0** (v3.2.0 review cancelled)
+⏳ **Chrome Web Store: v3.1.0 · latest release: v3.2.0** (v3.2.0 in review)
 
 <details><summary>Not in the store version yet (11 changes)</summary>
 

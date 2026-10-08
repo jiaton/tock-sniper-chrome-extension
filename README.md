@@ -48,25 +48,7 @@ The store version can lag behind: every new version waits for Google's review (u
 features reach [GitHub releases](https://github.com/jiaton/tock-sniper-chrome-extension/releases/latest) first. Current status (updated automatically):
 
 <!-- store-diff:start -->
-⏳ **Chrome Web Store: v3.1.0 · latest release: v3.2.0** (v3.2.0 in review)
-
-<details><summary>Not in the store version yet (11 changes)</summary>
-
-- Monitor: read seat availability, take a nearby open time; keep an activity log
-- Monitor: a listed experience isn't availability; show party-size limits
-- Pre-check single lock attempts against offerings + calendar
-- Monitor: don't repeat the pre-check's requests right away
-- API mode: one tab for all targets, tried by priority
-- Only one API tab sends: lease from the background
-- Party-size policy: optionally lock as many seats as offered
-- Burst: weight sends by target priority
-- Fix monitor crash after editing the popup while armed
-- Store status: full checkout so the README commit can rebase
-- Release v3.2.0: one API tab for all targets, seat-aware monitor, partial parties
-
-[Full comparison](https://github.com/jiaton/tock-sniper-chrome-extension/compare/v3.1.0...v3.2.0) · get v3.2.0 now: [manual install](#manual--developer)
-
-</details>
+✅ **The Chrome Web Store has the latest release, v3.2.0.**
 <!-- store-diff:end -->
 
 ### Manual / Developer
